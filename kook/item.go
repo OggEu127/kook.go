@@ -93,15 +93,15 @@ func (s *ItemService) DeleteItems(ctx context.Context, userItemIDs []int) error 
 
 // Item 物品信息
 type Item struct {
-	ID           string `json:"id"`            // 物品ID
-	Status       int    `json:"status"`        // 状态
-	Type         int    `json:"type"`          // 类型
-	Name         string `json:"name"`          // 名称
-	Price        int    `json:"price"`         // 价格（分）
-	OriginPrice  int    `json:"origin_price"`  // 原价（分）
-	ServiceTime  int    `json:"service_time"`  // 服务时间
+	ID            string `json:"id"`             // 物品ID
+	Status        int    `json:"status"`         // 状态
+	Type          int    `json:"type"`           // 类型
+	Name          string `json:"name"`           // 名称
+	Price         int    `json:"price"`          // 价格（分）
+	OriginPrice   int    `json:"origin_price"`   // 原价（分）
+	ServiceTime   int    `json:"service_time"`   // 服务时间
 	DiscountLabel string `json:"discount_label"` // 折扣标签
-	IAPCode      string `json:"iap_code"`      // IAP代码
+	IAPCode       string `json:"iap_code"`       // IAP代码
 }
 
 // BagItem 背包物品
@@ -121,8 +121,8 @@ type ItemListResponse struct {
 
 // 物品分类常量
 const (
-	ItemCategoryAll        = "all"         // 全部
-	ItemCategoryTimeLimit  = "time_limit"  // 限时物品
-	ItemCategoryDecoration = "decoration"  // 装饰物品
-	ItemCategoryAction     = "action"      // 动作物品
-) 
+	ItemCategoryAll        = "all"        // 全部
+	ItemCategoryTimeLimit  = "time_limit" // 限时物品
+	ItemCategoryDecoration = "decoration" // 装饰物品
+	ItemCategoryAction     = "action"     // 动作物品
+)

@@ -33,4 +33,4 @@ type Region struct {
 	ID       string `json:"id"`       // 区域ID
 	Name     string `json:"name"`     // 区域名称
 	Crowding int    `json:"crowding"` // 拥挤程度（百分比）
-} 
+}

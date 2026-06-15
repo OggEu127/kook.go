@@ -55,4 +55,4 @@ type OAuthTokenResponse struct {
 	ExpiresIn    int    `json:"expires_in"`    // 过期时间（秒）
 	RefreshToken string `json:"refresh_token"` // 刷新令牌
 	Scope        string `json:"scope"`         // 权限范围
-} 
+}

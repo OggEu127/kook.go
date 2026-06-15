@@ -95,8 +95,8 @@ func (s *SecurityService) UpdateVerificationLevel(ctx context.Context, guildID s
 
 // SecuritySettings 安全设置
 type SecuritySettings struct {
-	GuildID  string           `json:"guild_id"`  // 服务器ID
-	Settings []SecurityRule   `json:"settings"`  // 安全规则列表
+	GuildID  string         `json:"guild_id"` // 服务器ID
+	Settings []SecurityRule `json:"settings"` // 安全规则列表
 }
 
 // SecurityRule 安全规则
@@ -116,9 +116,9 @@ type VerificationLevel struct {
 
 // 验证等级常量
 const (
-	VerificationLevelNone   = 0 // 无限制
-	VerificationLevelLow    = 1 // 低（需要验证邮箱）
-	VerificationLevelMedium = 2 // 中（需要在服务器待满5分钟）
-	VerificationLevelHigh   = 3 // 高（需要在KOOK注册超过10分钟）
+	VerificationLevelNone     = 0 // 无限制
+	VerificationLevelLow      = 1 // 低（需要验证邮箱）
+	VerificationLevelMedium   = 2 // 中（需要在服务器待满5分钟）
+	VerificationLevelHigh     = 3 // 高（需要在KOOK注册超过10分钟）
 	VerificationLevelVeryHigh = 4 // 极高（需要绑定手机号）
-) 
+)

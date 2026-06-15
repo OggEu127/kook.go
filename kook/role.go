@@ -204,13 +204,13 @@ func (s *RoleService) RevokeRole(ctx context.Context, guildID, userID string, ro
 
 // GuildRole 服务器角色信息
 type GuildRole struct {
-	RoleID      int `json:"role_id"`      // 角色ID
-	Name        string `json:"name"`         // 角色名称
-	Color       int `json:"color"`        // 角色色值
-	Position    int `json:"position"`     // 角色位置
-	Hoist       int `json:"hoist"`        // 是否在用户列表排到前面
-	Mentionable int `json:"mentionable"`  // 是否可以被提及
-	Permissions int `json:"permissions"`  // 权限值
+	RoleID      int    `json:"role_id"`     // 角色ID
+	Name        string `json:"name"`        // 角色名称
+	Color       int    `json:"color"`       // 角色色值
+	Position    int    `json:"position"`    // 角色位置
+	Hoist       int    `json:"hoist"`       // 是否在用户列表排到前面
+	Mentionable int    `json:"mentionable"` // 是否可以被提及
+	Permissions int    `json:"permissions"` // 权限值
 }
 
 // UpdateRoleParams 更新角色参数
@@ -234,4 +234,4 @@ type UserRoleResponse struct {
 	UserID  string `json:"user_id"`  // 用户ID
 	GuildID string `json:"guild_id"` // 服务器ID
 	Roles   []int  `json:"roles"`    // 角色ID列表
-} 
+}

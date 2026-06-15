@@ -5,7 +5,7 @@ import (
 	"log"
 	"os"
 
-	"kook-go-sdk/kook"
+	"github.com/OggEu127/kook.go/kook"
 )
 
 func main() {
@@ -114,4 +114,3 @@ func demonstrateMessageAPI(client *kook.Client) {
 		log.Printf("消息: %s (作者: %s)", msg.Content, msg.Author.Username)
 	}
 }
- 

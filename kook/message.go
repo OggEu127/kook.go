@@ -457,6 +457,59 @@ func (s *MessageService) CheckCard(ctx context.Context, content string) (*CheckC
 	return &result, nil
 }
 
+// SendPipeMessage 通过 Pipe 发送频道消息
+func (s *MessageService) SendPipeMessage(ctx context.Context, params SendMessageParams) (*Message, error) {
+	if params.TargetID == "" {
+		return nil, fmt.Errorf("频道消息目标ID不能为空")
+	}
+	if params.Content == "" {
+		return nil, fmt.Errorf("消息内容不能为空")
+	}
+
+	msgType := params.MsgType
+	if msgType <= 0 {
+		msgType = MessageTypeKMD
+	}
+	if msgType == MessageTypeCard {
+		if err := validateCardContent(params.Content); err != nil {
+			return nil, err
+		}
+	}
+
+	requestParams := map[string]interface{}{
+		"target_id": params.TargetID,
+		"content":   params.Content,
+		"type":      msgType,
+	}
+	if params.Quote != "" {
+		requestParams["quote"] = params.Quote
+	}
+	if params.Nonce != "" {
+		requestParams["nonce"] = params.Nonce
+	}
+
+	resp, err := s.client.Post(ctx, "message/send-pipemsg", requestParams)
+	if err != nil {
+		return nil, err
+	}
+
+	var created struct {
+		MsgID        string `json:"msg_id"`
+		MsgTimestamp int64  `json:"msg_timestamp"`
+		Nonce        string `json:"nonce"`
+	}
+	if err := json.Unmarshal(resp.Data, &created); err != nil {
+		return nil, fmt.Errorf("解析Pipe消息失败: %w", err)
+	}
+
+	return &Message{
+		ID:       created.MsgID,
+		Type:     msgType,
+		Content:  params.Content,
+		CreateAt: created.MsgTimestamp,
+	}, nil
+}
+
 // SendMessageParams 发送消息参数
 type SendMessageParams struct {
 	Type         string `json:"type,omitempty"`           // 作用域：private 或 channel（默认channel）

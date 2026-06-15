@@ -53,4 +53,3 @@ func (s *GatewayService) GetVoiceGateway(ctx context.Context, channelID string) 
 
 	return &voiceGateway, nil
 }
- 

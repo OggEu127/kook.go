@@ -8,7 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"kook-go-sdk/kook"
+	"github.com/OggEu127/kook.go/kook"
 )
 
 func main() {
@@ -68,4 +68,3 @@ func main() {
 	log.Println("正在关闭机器人...")
 	ws.Close()
 }
- 

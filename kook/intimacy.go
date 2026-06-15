@@ -78,4 +78,4 @@ type Intimacy struct {
 	LastModify int64  `json:"last_modify"` // 最后修改时间
 	ImgID      string `json:"img_id"`      // 图片ID
 	ImgURL     string `json:"img_url"`     // 图片URL
-} 
+}

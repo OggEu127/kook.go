@@ -74,17 +74,17 @@ func (s *VoiceService) UndeafenUser(ctx context.Context, channelID, userID strin
 }
 
 // GetJoinedVoiceChannels 获取机器人已加入的语音频道列表
-func (s *VoiceService) GetJoinedVoiceChannels(ctx context.Context) ([]VoiceConnectionInfo, error) {
+func (s *VoiceService) GetJoinedVoiceChannels(ctx context.Context) (*ListVoiceChannelsResponse, error) {
 	resp, err := s.client.Get(ctx, "voice/list", nil)
 	if err != nil {
 		return nil, err
 	}
 
-	var conns []VoiceConnectionInfo
-	if err := json.Unmarshal(resp.Data, &conns); err != nil {
+	var result ListVoiceChannelsResponse
+	if err := json.Unmarshal(resp.Data, &result); err != nil {
 		return nil, fmt.Errorf("解析语音频道列表失败: %w", err)
 	}
-	return conns, nil
+	return &result, nil
 }
 
 // KeepAliveVoiceChannel 续期语音频道占用
@@ -105,10 +105,28 @@ func (s *VoiceService) KeepAliveVoiceChannel(ctx context.Context, channelID stri
 
 // VoiceConnectionInfo 语音连接信息
 type VoiceConnectionInfo struct {
-	GatewayURL string `json:"gateway_url"` // 语音网关URL
-	Token      string `json:"token"`       // 语音令牌
-	Endpoint   string `json:"endpoint"`    // 连接端点
-	SessionID  string `json:"session_id"`  // 会话ID
+	IP        string `json:"ip"`         // 媒体服务器推流IP
+	Port      string `json:"port"`       // 媒体服务器推流端口
+	RTCPMux   bool   `json:"rtcp_mux"`   // 是否将RTCP与RTP使用同一个端口
+	RTCPPort  string `json:"rtcp_port"`  // RTCP推流端口
+	Bitrate   int    `json:"bitrate"`    // 当前语音房间要求的比特率
+	AudioSSRC string `json:"audio_ssrc"` // 最终的SSRC
+	AudioPT   string `json:"audio_pt"`   // 最终的Payload Type
+}
+
+// VoiceChannel 机器人已加入的语音频道
+type VoiceChannel struct {
+	ID       string `json:"id"`        // 频道ID
+	GuildID  string `json:"guild_id"`  // 服务器ID
+	ParentID string `json:"parent_id"` // 父频道ID
+	Name     string `json:"name"`      // 频道名称
+}
+
+// ListVoiceChannelsResponse 语音频道列表响应
+type ListVoiceChannelsResponse struct {
+	Items []VoiceChannel `json:"items"`
+	Meta  PaginationMeta `json:"meta"`
+	Sort  map[string]int `json:"sort"`
 }
 
 // VoiceUser 语音频道用户

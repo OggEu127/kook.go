@@ -5,7 +5,7 @@ import (
 	"log"
 	"os"
 
-	"kook-go-sdk/kook"
+	"github.com/OggEu127/kook.go/kook"
 )
 
 func main() {

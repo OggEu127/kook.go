@@ -89,11 +89,11 @@ func (s *BlacklistService) DeleteBlacklistUser(ctx context.Context, guildID, use
 
 // BlacklistUser 屏蔽用户信息
 type BlacklistUser struct {
-	User       User   `json:"user"`        // 用户信息
-	Remark     string `json:"remark"`      // 屏蔽备注
-	UserID     string `json:"user_id"`     // 用户ID
-	CreatedAt  int64  `json:"created_at"`  // 屏蔽时间
-	UpdatedAt  int64  `json:"updated_at"`  // 更新时间
+	User      User   `json:"user"`       // 用户信息
+	Remark    string `json:"remark"`     // 屏蔽备注
+	UserID    string `json:"user_id"`    // 用户ID
+	CreatedAt int64  `json:"created_at"` // 屏蔽时间
+	UpdatedAt int64  `json:"updated_at"` // 更新时间
 }
 
 // BlacklistResponse 屏蔽用户列表响应
@@ -101,4 +101,4 @@ type BlacklistResponse struct {
 	Items []BlacklistUser `json:"items"`
 	Meta  PaginationMeta  `json:"meta"`
 	Sort  map[string]int  `json:"sort"`
-} 
+}

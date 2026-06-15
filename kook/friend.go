@@ -32,7 +32,7 @@ func (s *FriendService) SendFriendRequest(ctx context.Context, params SendFriend
 
 // GetFriendsList 获取好友列表
 func (s *FriendService) GetFriendsList(ctx context.Context) (*FriendsListResponse, error) {
-	resp, err := s.client.Get(ctx, "friends", nil)
+	resp, err := s.client.Get(ctx, "friend", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -84,23 +84,84 @@ func (s *FriendService) RejectFriendRequest(ctx context.Context, requestID strin
 	return s.HandleFriendRequest(ctx, requestID, false)
 }
 
+// CreateRelation 发起好友亲密关系请求
+func (s *FriendService) CreateRelation(ctx context.Context, userID string) error {
+	if userID == "" {
+		return fmt.Errorf("用户ID不能为空")
+	}
+
+	_, err := s.client.Post(ctx, "friend/create-relation", map[string]interface{}{
+		"user_id": userID,
+	})
+	return err
+}
+
+// HandleRelation 处理好友亲密关系请求
+func (s *FriendService) HandleRelation(ctx context.Context, requestID string, accept bool) error {
+	if requestID == "" {
+		return fmt.Errorf("请求ID不能为空")
+	}
+
+	_, err := s.client.Post(ctx, "friend/handle-relation", map[string]interface{}{
+		"id":     requestID,
+		"accept": accept,
+	})
+	return err
+}
+
+// UnravelRelation 解除好友亲密关系
+func (s *FriendService) UnravelRelation(ctx context.Context, userID string) error {
+	if userID == "" {
+		return fmt.Errorf("用户ID不能为空")
+	}
+
+	_, err := s.client.Post(ctx, "friend/unravel-relation", map[string]interface{}{
+		"user_id": userID,
+	})
+	return err
+}
+
+// BlockFriend 屏蔽好友
+func (s *FriendService) BlockFriend(ctx context.Context, userID string) error {
+	if userID == "" {
+		return fmt.Errorf("用户ID不能为空")
+	}
+
+	_, err := s.client.Post(ctx, "friend/block", map[string]interface{}{
+		"user_id": userID,
+	})
+	return err
+}
+
+// UnblockFriend 取消屏蔽好友
+func (s *FriendService) UnblockFriend(ctx context.Context, userID string) error {
+	if userID == "" {
+		return fmt.Errorf("用户ID不能为空")
+	}
+
+	_, err := s.client.Post(ctx, "friend/unblock", map[string]interface{}{
+		"user_id": userID,
+	})
+	return err
+}
+
 // 数据结构定义
 
 // SendFriendRequestParams 发送好友请求参数
 type SendFriendRequestParams struct {
-	UserCode string `json:"user_code"`         // 用户识别码，格式: username#identify_num
-	From     int    `json:"from"`              // 请求来源：0直接添加，1普通添加，2从服务器添加
+	UserCode string `json:"user_code"`          // 用户识别码，格式: username#identify_num
+	From     int    `json:"from"`               // 请求来源：0直接添加，1普通添加，2从服务器添加
 	GuildID  string `json:"guild_id,omitempty"` // 服务器ID（当from=2时必填）
 }
 
 // FriendRequest 好友请求信息
 type FriendRequest struct {
-	ID      string `json:"id"`       // 请求ID
-	UserID  string `json:"user_id"`  // 用户ID
-	User    User   `json:"user"`     // 用户信息
-	Status  int    `json:"status"`   // 请求状态
-	Time    int64  `json:"time"`     // 请求时间
-	Message string `json:"message"`  // 请求消息
+	ID      string `json:"id"`      // 请求ID
+	UserID  string `json:"user_id"` // 用户ID
+	User    User   `json:"user"`    // 用户信息
+	Status  int    `json:"status"`  // 请求状态
+	Time    int64  `json:"time"`    // 请求时间
+	Message string `json:"message"` // 请求消息
 }
 
 // FriendsListResponse 好友列表响应
@@ -115,4 +176,4 @@ const (
 	FriendRequestFromDirect = 0 // 直接添加
 	FriendRequestFromNormal = 1 // 普通添加
 	FriendRequestFromGuild  = 2 // 从服务器添加
-) 
+)

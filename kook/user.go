@@ -185,7 +185,6 @@ func (s *UserService) GetOnlineStatus(ctx context.Context) (*OnlineStatus, error
 
 // OnlineStatus 在线状态信息
 type OnlineStatus struct {
-	Online   bool     `json:"online"`     // 是否在线
-	OnlineOS []string `json:"online_os"`  // 在线的平台列表
+	Online   bool     `json:"online"`    // 是否在线
+	OnlineOS []string `json:"online_os"` // 在线的平台列表
 }
- 

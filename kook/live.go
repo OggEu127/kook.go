@@ -87,4 +87,4 @@ type LiveInfo struct {
 	EndTime     int64  `json:"end_time"`     // 结束时间
 	StreamURL   string `json:"stream_url"`   // 推流地址
 	PlayURL     string `json:"play_url"`     // 播放地址
-} 
+}

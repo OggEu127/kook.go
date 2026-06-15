@@ -20,7 +20,7 @@ const (
 	// Version API版本
 	Version = "v3"
 	// UserAgent 用户代理
-	UserAgent = "KOOK-Go-SDK/1.0.0"
+	UserAgent = "KOOK-Go-SDK/1.1.0"
 )
 
 // TokenType 鉴权类型
@@ -58,6 +58,8 @@ type Client struct {
 	Badge     *BadgeService
 	Blacklist *BlacklistService
 	Emoji     *EmojiService
+	UserChat  *UserChatService
+	Thread    *ThreadService
 	Region    *RegionService
 	OAuth     *OAuthService
 	Live      *LiveService
@@ -178,6 +180,8 @@ func NewClient(token string, options ...ClientOption) *Client {
 	client.Badge = &BadgeService{client: client}
 	client.Blacklist = &BlacklistService{client: client}
 	client.Emoji = &EmojiService{client: client}
+	client.UserChat = &UserChatService{client: client}
+	client.Thread = &ThreadService{client: client}
 	client.Region = &RegionService{client: client}
 	client.OAuth = &OAuthService{client: client}
 	client.Live = &LiveService{client: client}

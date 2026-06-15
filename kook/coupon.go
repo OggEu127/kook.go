@@ -80,23 +80,23 @@ func (s *CouponService) UseCoupon(ctx context.Context, couponID string, orderID 
 
 // Coupon 优惠券信息
 type Coupon struct {
-	ID          string `json:"id"`           // 优惠券ID
-	Code        string `json:"code"`         // 优惠券代码
-	Name        string `json:"name"`         // 名称
-	Description string `json:"description"`  // 描述
-	Type        int    `json:"type"`         // 类型：1折扣，2满减
-	Value       int    `json:"value"`        // 值（分）
-	MinAmount   int    `json:"min_amount"`   // 最小金额（分）
-	ExpiredAt   int64  `json:"expired_at"`   // 过期时间
-	Used        bool   `json:"used"`         // 是否已使用
-	UsedAt      int64  `json:"used_at"`      // 使用时间
-	CreatedAt   int64  `json:"created_at"`   // 创建时间
+	ID          string `json:"id"`          // 优惠券ID
+	Code        string `json:"code"`        // 优惠券代码
+	Name        string `json:"name"`        // 名称
+	Description string `json:"description"` // 描述
+	Type        int    `json:"type"`        // 类型：1折扣，2满减
+	Value       int    `json:"value"`       // 值（分）
+	MinAmount   int    `json:"min_amount"`  // 最小金额（分）
+	ExpiredAt   int64  `json:"expired_at"`  // 过期时间
+	Used        bool   `json:"used"`        // 是否已使用
+	UsedAt      int64  `json:"used_at"`     // 使用时间
+	CreatedAt   int64  `json:"created_at"`  // 创建时间
 }
 
 // CouponExchangeResult 优惠券兑换结果
 type CouponExchangeResult struct {
-	Success bool   `json:"success"`         // 是否成功
-	Message string `json:"message"`         // 消息
+	Success bool   `json:"success"`          // 是否成功
+	Message string `json:"message"`          // 消息
 	Coupon  Coupon `json:"coupon,omitempty"` // 优惠券信息
 	Items   []Item `json:"items,omitempty"`  // 物品列表
 }
@@ -110,6 +110,6 @@ type CouponListResponse struct {
 
 // 优惠券类型常量
 const (
-	CouponTypeDiscount = 1 // 折扣券
+	CouponTypeDiscount  = 1 // 折扣券
 	CouponTypeReduction = 2 // 满减券
-) 
+)

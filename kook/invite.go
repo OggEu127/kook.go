@@ -120,11 +120,11 @@ type ListInvitesResponse struct {
 
 // 邀请有效期常量
 const (
-	InviteDurationForever   = 0      // 永久
-	InviteDurationHalfHour  = 1800   // 半小时
-	InviteDurationOneHour   = 3600   // 一小时
-	InviteDurationSixHours  = 21600  // 六小时
-	InviteDurationTwelveHours = 43200 // 十二小时
-	InviteDurationOneDay    = 86400  // 一天
-	InviteDurationOneWeek   = 604800 // 七天
-) 
+	InviteDurationForever     = 0      // 永久
+	InviteDurationHalfHour    = 1800   // 半小时
+	InviteDurationOneHour     = 3600   // 一小时
+	InviteDurationSixHours    = 21600  // 六小时
+	InviteDurationTwelveHours = 43200  // 十二小时
+	InviteDurationOneDay      = 86400  // 一天
+	InviteDurationOneWeek     = 604800 // 七天
+)

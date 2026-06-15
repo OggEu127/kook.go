@@ -45,4 +45,4 @@ type Badge struct {
 	Type        int    `json:"type"`        // 徽章类型
 	Level       int    `json:"level"`       // 徽章等级
 	Unlocked    bool   `json:"unlocked"`    // 是否已解锁
-} 
+}

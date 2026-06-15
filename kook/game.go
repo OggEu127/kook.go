@@ -206,4 +206,4 @@ const (
 	SoftwareCloudMusic = "cloudmusic" // 网易云音乐
 	SoftwareQQMusic    = "qqmusic"    // QQ音乐
 	SoftwareKugou      = "kugou"      // 酷狗音乐
-) 
+)

@@ -29,7 +29,7 @@ func (s *EmojiService) GetEmojiList(ctx context.Context, guildID string, page, p
 		query["page_size"] = strconv.Itoa(pageSize)
 	}
 
-	resp, err := s.client.Get(ctx, "emoji/list", query)
+	resp, err := s.client.Get(ctx, "guild-emoji/list", query)
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +57,7 @@ func (s *EmojiService) CreateEmoji(ctx context.Context, name, guildID string, em
 		"emoji":    emoji, // 可以是文件或URL
 	}
 
-	resp, err := s.client.Post(ctx, "emoji/create", params)
+	resp, err := s.client.Post(ctx, "guild-emoji/create", params)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +84,7 @@ func (s *EmojiService) UpdateEmoji(ctx context.Context, id, name string) (*Emoji
 		params["name"] = name
 	}
 
-	resp, err := s.client.Post(ctx, "emoji/update", params)
+	resp, err := s.client.Post(ctx, "guild-emoji/update", params)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +107,7 @@ func (s *EmojiService) DeleteEmoji(ctx context.Context, id string) error {
 		"id": id,
 	}
 
-	_, err := s.client.Post(ctx, "emoji/delete", params)
+	_, err := s.client.Post(ctx, "guild-emoji/delete", params)
 	return err
 }
 
@@ -115,9 +115,9 @@ func (s *EmojiService) DeleteEmoji(ctx context.Context, id string) error {
 
 // Emoji 表情信息
 type Emoji struct {
-	ID     string `json:"id"`     // 表情ID
-	Name   string `json:"name"`   // 表情名称
-	URL    string `json:"url"`    // 表情URL
+	ID     string `json:"id"`      // 表情ID
+	Name   string `json:"name"`    // 表情名称
+	URL    string `json:"url"`     // 表情URL
 	UserID string `json:"user_id"` // 创建者ID
 }
 
@@ -126,4 +126,4 @@ type EmojiListResponse struct {
 	Items []Emoji        `json:"items"`
 	Meta  PaginationMeta `json:"meta"`
 	Sort  map[string]int `json:"sort"`
-} 
+}

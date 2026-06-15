@@ -6,7 +6,7 @@ import (
 	"log"
 	"os"
 
-	"kook-go-sdk/kook"
+	"github.com/OggEu127/kook.go/kook"
 )
 
 func main() {
@@ -131,4 +131,3 @@ func main() {
 	fmt.Println("所有API接口已成功调用，详细的错误处理和功能展示请查看日志输出。")
 	fmt.Println("请根据实际需要调用相应的API接口。")
 }
- 

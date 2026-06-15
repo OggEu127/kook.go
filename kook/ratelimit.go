@@ -161,4 +161,3 @@ func (grl *GlobalRateLimiter) TryAcquire(endpoint string) bool {
 	}
 	return true
 }
-

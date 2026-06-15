@@ -146,10 +146,10 @@ type AuditLogResponse struct {
 
 // BannedUser 被封禁的用户
 type BannedUser struct {
-	User      User   `json:"user"`       // 用户信息
-	Reason    string `json:"reason"`     // 封禁原因
-	BannedAt  int64  `json:"banned_at"`  // 封禁时间
-	BannedBy  string `json:"banned_by"`  // 封禁者ID
+	User     User   `json:"user"`      // 用户信息
+	Reason   string `json:"reason"`    // 封禁原因
+	BannedAt int64  `json:"banned_at"` // 封禁时间
+	BannedBy string `json:"banned_by"` // 封禁者ID
 }
 
 // BannedUsersResponse 被封禁用户列表响应
@@ -174,4 +174,4 @@ const (
 	AuditLogActionMemberUpdate     = 24 // 成员更新
 	AuditLogActionMemberRoleUpdate = 25 // 成员角色更新
 	AuditLogActionMessageDelete    = 72 // 消息删除
-) 
+)

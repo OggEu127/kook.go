@@ -116,4 +116,4 @@ type GuildBoostListResponse struct {
 	Items []GuildBoost   `json:"items"`
 	Meta  PaginationMeta `json:"meta"`
 	Sort  map[string]int `json:"sort"`
-} 
+}

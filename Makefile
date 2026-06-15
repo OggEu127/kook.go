@@ -90,4 +90,4 @@ help:
 	@echo "  install       - 安装到GOPATH"
 	@echo "  docs          - 生成文档服务器"
 	@echo "  test-full     - 完整测试"
-	@echo "  help          - 显示此帮助信息" 
+	@echo "  help          - 显示此帮助信息"

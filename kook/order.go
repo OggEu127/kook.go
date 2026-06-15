@@ -108,45 +108,45 @@ type OrderProduct struct {
 
 // Order 订单信息
 type Order struct {
-	ID                string      `json:"id"`                  // 订单ID
-	Status            int         `json:"status"`              // 订单状态
-	UserID            string      `json:"user_id"`             // 用户ID
-	TotalFee          int         `json:"total_fee"`           // 总费用（分）
-	PayFee            int         `json:"pay_fee"`             // 支付费用（分）
-	Paid              bool        `json:"paid"`                // 是否已支付
-	PayTime           int64       `json:"pay_time"`            // 支付时间
-	CreateTime        int64       `json:"create_time"`         // 创建时间
-	Products          []Product   `json:"products"`            // 商品列表
-	UsageInfo         string      `json:"usage_info"`          // 使用信息
-	ItemEntitiesDesc  string      `json:"item_entities_desc"`  // 物品实体描述
-	PayData           *PayData    `json:"paydata,omitempty"`   // 支付数据
+	ID               string    `json:"id"`                 // 订单ID
+	Status           int       `json:"status"`             // 订单状态
+	UserID           string    `json:"user_id"`            // 用户ID
+	TotalFee         int       `json:"total_fee"`          // 总费用（分）
+	PayFee           int       `json:"pay_fee"`            // 支付费用（分）
+	Paid             bool      `json:"paid"`               // 是否已支付
+	PayTime          int64     `json:"pay_time"`           // 支付时间
+	CreateTime       int64     `json:"create_time"`        // 创建时间
+	Products         []Product `json:"products"`           // 商品列表
+	UsageInfo        string    `json:"usage_info"`         // 使用信息
+	ItemEntitiesDesc string    `json:"item_entities_desc"` // 物品实体描述
+	PayData          *PayData  `json:"paydata,omitempty"`  // 支付数据
 }
 
 // Product 商品信息
 type Product struct {
-	ID         int            `json:"id"`          // 商品ID
-	ItemID     int            `json:"item_id"`     // 物品ID
-	Item       ProductItem    `json:"item"`        // 物品信息
-	Total      int            `json:"total"`       // 数量
-	ExpireTime int64          `json:"expire_time"` // 过期时间
+	ID         int         `json:"id"`          // 商品ID
+	ItemID     int         `json:"item_id"`     // 物品ID
+	Item       ProductItem `json:"item"`        // 物品信息
+	Total      int         `json:"total"`       // 数量
+	ExpireTime int64       `json:"expire_time"` // 过期时间
 }
 
 // ProductItem 商品物品信息
 type ProductItem struct {
-	ID              int                    `json:"id"`               // 物品ID
-	Name            string                 `json:"name"`             // 名称
-	Desc            string                 `json:"desc"`             // 描述
-	CD              int                    `json:"cd"`               // 冷却时间
-	Categories      []string               `json:"categories"`       // 分类
-	Label           int                    `json:"label"`            // 标签
-	LabelName       string                 `json:"label_name"`       // 标签名称
-	Quality         int                    `json:"quality"`          // 品质
-	Icon            string                 `json:"icon"`             // 图标
-	IconThumb       string                 `json:"icon_thumb"`       // 图标缩略图
-	IconExpired     string                 `json:"icon_expired"`     // 过期图标
-	QualityResource QualityResource        `json:"quality_resource"` // 品质资源
-	Resources       ProductItemResources   `json:"resources"`        // 资源
-	Position        string                 `json:"position"`         // 位置
+	ID              int                  `json:"id"`               // 物品ID
+	Name            string               `json:"name"`             // 名称
+	Desc            string               `json:"desc"`             // 描述
+	CD              int                  `json:"cd"`               // 冷却时间
+	Categories      []string             `json:"categories"`       // 分类
+	Label           int                  `json:"label"`            // 标签
+	LabelName       string               `json:"label_name"`       // 标签名称
+	Quality         int                  `json:"quality"`          // 品质
+	Icon            string               `json:"icon"`             // 图标
+	IconThumb       string               `json:"icon_thumb"`       // 图标缩略图
+	IconExpired     string               `json:"icon_expired"`     // 过期图标
+	QualityResource QualityResource      `json:"quality_resource"` // 品质资源
+	Resources       ProductItemResources `json:"resources"`        // 资源
+	Position        string               `json:"position"`         // 位置
 }
 
 // QualityResource 品质资源
@@ -185,4 +185,4 @@ type OrderListResponse struct {
 	Items []Order        `json:"items"`
 	Meta  PaginationMeta `json:"meta"`
 	Sort  map[string]int `json:"sort"`
-} 
+}

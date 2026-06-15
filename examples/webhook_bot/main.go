@@ -5,7 +5,7 @@ import (
 	"log"
 	"os"
 
-	"kook-go-sdk/kook"
+	"github.com/OggEu127/kook.go/kook"
 )
 
 func main() {
@@ -57,4 +57,3 @@ func main() {
 		log.Fatalf("启动Webhook服务器失败: %v", err)
 	}
 }
- 
