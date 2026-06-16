@@ -1,21 +1,68 @@
-MIT License
+KOOK Go SDK Commercial-Allowed Source-Available Copyleft License v1.0
 
 Copyright (c) 2026 OggEu127
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This license grants permission to use, copy, modify, distribute, and use this
+software commercially under the following terms.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. Commercial Use Is Allowed
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+You may use this software for personal, educational, internal, open-source, and
+commercial purposes.
+
+2. Source Code Must Remain Open
+
+If you modify this software, create a derivative work, or distribute software
+that includes all or part of this software, you must make the complete
+corresponding source code available to recipients.
+
+The source code must be provided under this same license.
+
+You may not distribute modified versions, derivative works, or combined works
+that include this software as closed-source software.
+
+3. Commercial Modification Notice
+
+If you use a modified version of this software for commercial purposes, you
+must provide documentation that clearly describes the modifications you made.
+
+The modification documentation must include:
+
+- the files or modules that were changed;
+- a summary of the functional changes;
+- the date or version of the modified release;
+- a notice that the work is based on this software.
+
+The modification documentation must be provided with the modified software or
+made available in a reasonably accessible location.
+
+4. Redistribution Requirements
+
+Any redistribution must include:
+
+- this license file;
+- the original copyright notice;
+- a clear notice of any modifications you made;
+- for commercial modified versions, the modification documentation described
+  in section 3.
+
+5. No Trademark Rights
+
+This license does not grant permission to use the names, logos, or trademarks
+of the copyright holder except as required for reasonable attribution.
+
+6. No Warranty
+
+This software is provided "as is", without warranty of any kind, express or
+implied, including but not limited to the warranties of merchantability,
+fitness for a particular purpose, and non-infringement.
+
+In no event shall the authors or copyright holders be liable for any claim,
+damages, or other liability arising from the use of this software.
+
+7. Additional Permission
+
+Closed-source use or closed-source distribution may be permitted only with
+explicit prior written permission from the copyright holder.
+
+If you need a closed-source license, contact the copyright holder.

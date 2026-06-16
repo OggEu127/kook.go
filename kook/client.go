@@ -20,7 +20,7 @@ const (
 	// Version API版本
 	Version = "v3"
 	// UserAgent 用户代理
-	UserAgent = "KOOK-Go-SDK/1.1.0"
+	UserAgent = "KOOK-Go-SDK/1.1.1"
 )
 
 // TokenType 鉴权类型
