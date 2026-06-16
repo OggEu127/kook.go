@@ -4,7 +4,7 @@
 
 ## 相关文档
 
-- [SDK 使用文档](https://blog.oggeu.com/posts/Docs/SDK_USAGE)
+- [SDK 使用文档]([https://blog.oggeu.com/posts/Docs/kook-go-sdk])
 
 ## 安装
 
