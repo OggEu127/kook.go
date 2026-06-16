@@ -252,7 +252,7 @@ func (c *Client) doSingleRequest(ctx context.Context, method, endpoint string, p
 	// 设置请求头
 	req.Header.Set("Authorization", fmt.Sprintf("%s %s", c.tokenType, c.token))
 	req.Header.Set("User-Agent", UserAgent)
-	if method == "POST" && params != nil {
+	if params != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept-Language", "zh-cn")

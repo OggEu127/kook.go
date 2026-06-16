@@ -28,6 +28,7 @@ type WebSocketClient struct {
 	compress        bool
 	sn              int
 	sessionID       string
+	stateMu         sync.RWMutex
 	heartbeatTicker *time.Ticker
 	gatewayURL      string
 	reconnectCount  int
@@ -35,6 +36,7 @@ type WebSocketClient struct {
 	reconnectDelay  time.Duration
 	isConnected     bool
 	connMu          sync.RWMutex
+	writeMu         sync.Mutex
 }
 
 // WebSocketMessage WebSocket消息结构
@@ -110,7 +112,7 @@ func (ws *WebSocketClient) connectWithRetry() error {
 	for attempts := 0; attempts <= ws.maxReconnects; attempts++ {
 		err := ws.doConnect()
 		if err == nil {
-			ws.reconnectCount = 0
+			ws.setReconnectCount(0)
 			return nil
 		}
 
@@ -176,8 +178,12 @@ func (ws *WebSocketClient) Close() error {
 		ws.heartbeatTicker.Stop()
 	}
 
-	if ws.conn != nil {
-		return ws.conn.Close()
+	ws.connMu.RLock()
+	conn := ws.conn
+	ws.connMu.RUnlock()
+
+	if conn != nil {
+		return conn.Close()
 	}
 
 	return nil
@@ -250,16 +256,17 @@ func (ws *WebSocketClient) attemptReconnect() {
 	if ws.ctx.Err() != nil {
 		return
 	}
-	if ws.reconnectCount >= ws.maxReconnects {
+	reconnectCount := ws.getReconnectCount()
+	if reconnectCount >= ws.maxReconnects {
 		ws.client.logger.Error("已达到最大重连次数，停止重连")
 		return
 	}
 
-	ws.reconnectCount++
-	ws.client.logger.Infof("开始第 %d 次重连尝试", ws.reconnectCount)
+	reconnectCount = ws.incrementReconnectCount()
+	ws.client.logger.Infof("开始第 %d 次重连尝试", reconnectCount)
 
 	// 等待一段时间后重连
-	delay := ws.reconnectDelay * time.Duration(ws.reconnectCount)
+	delay := ws.reconnectDelay * time.Duration(reconnectCount)
 	select {
 	case <-time.After(delay):
 	case <-ws.ctx.Done():
@@ -273,7 +280,7 @@ func (ws *WebSocketClient) attemptReconnect() {
 		go ws.attemptReconnect()
 	} else {
 		ws.client.logger.Info("重连成功")
-		ws.reconnectCount = 0
+		ws.setReconnectCount(0)
 	}
 }
 
@@ -329,7 +336,7 @@ func (ws *WebSocketClient) handleEvent(msg *WebSocketMessage) error {
 		return fmt.Errorf("解析事件失败: %w", err)
 	}
 
-	ws.sn = msg.SN
+	ws.setSN(msg.SN)
 	ws.client.logger.Debugf("收到事件: 类型=%d, 内容=%s", event.Type, event.Content)
 
 	// 调用事件处理器
@@ -358,8 +365,8 @@ func (ws *WebSocketClient) handleHello(msg *WebSocketMessage) error {
 		return fmt.Errorf("解析Hello消息失败: %w", err)
 	}
 
-	ws.sessionID = hello.SessionID
-	ws.client.logger.Infof("WebSocket会话建立成功: %s", ws.sessionID)
+	ws.setSessionID(hello.SessionID)
+	ws.client.logger.Infof("WebSocket会话建立成功: %s", hello.SessionID)
 
 	if ws.heartbeatTicker != nil {
 		ws.heartbeatTicker.Stop()
@@ -400,8 +407,8 @@ func (ws *WebSocketClient) handleReconnect(msg *WebSocketMessage) error {
 	}
 
 	resumeData, _ := json.Marshal(ResumeMessage{
-		SessionID: ws.sessionID,
-		SN:        ws.sn,
+		SessionID: ws.getSessionID(),
+		SN:        ws.getSN(),
 	})
 	resume.D = resumeData
 
@@ -438,7 +445,7 @@ func (ws *WebSocketClient) startHeartbeat() {
 					S: SignalPing,
 				}
 
-				pingData, _ := json.Marshal(PingMessage{SN: ws.sn})
+				pingData, _ := json.Marshal(PingMessage{SN: ws.getSN()})
 				ping.D = pingData
 
 				if err := ws.sendMessage(&ping); err != nil {
@@ -483,7 +490,53 @@ func (ws *WebSocketClient) sendMessage(msg *WebSocketMessage) error {
 		return fmt.Errorf("WebSocket连接不可用")
 	}
 
+	ws.writeMu.Lock()
+	defer ws.writeMu.Unlock()
+
 	return conn.WriteMessage(websocket.TextMessage, data)
+}
+
+func (ws *WebSocketClient) setSN(sn int) {
+	ws.stateMu.Lock()
+	defer ws.stateMu.Unlock()
+	ws.sn = sn
+}
+
+func (ws *WebSocketClient) getSN() int {
+	ws.stateMu.RLock()
+	defer ws.stateMu.RUnlock()
+	return ws.sn
+}
+
+func (ws *WebSocketClient) setSessionID(sessionID string) {
+	ws.stateMu.Lock()
+	defer ws.stateMu.Unlock()
+	ws.sessionID = sessionID
+}
+
+func (ws *WebSocketClient) getSessionID() string {
+	ws.stateMu.RLock()
+	defer ws.stateMu.RUnlock()
+	return ws.sessionID
+}
+
+func (ws *WebSocketClient) setReconnectCount(count int) {
+	ws.stateMu.Lock()
+	defer ws.stateMu.Unlock()
+	ws.reconnectCount = count
+}
+
+func (ws *WebSocketClient) getReconnectCount() int {
+	ws.stateMu.RLock()
+	defer ws.stateMu.RUnlock()
+	return ws.reconnectCount
+}
+
+func (ws *WebSocketClient) incrementReconnectCount() int {
+	ws.stateMu.Lock()
+	defer ws.stateMu.Unlock()
+	ws.reconnectCount++
+	return ws.reconnectCount
 }
 
 // decompress 解压数据
