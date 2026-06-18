@@ -123,7 +123,7 @@ func (s *GuildService) GetGuildMember(ctx context.Context, guildID, userID strin
 		"user_id":  userID,
 	}
 
-	resp, err := s.client.Get(ctx, "guild/user", query)
+	resp, err := s.client.Get(ctx, "user/view", query)
 	if err != nil {
 		return nil, err
 	}

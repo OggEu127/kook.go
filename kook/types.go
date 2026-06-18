@@ -88,7 +88,7 @@ type Channel struct {
 	PermissionSync       int                   `json:"permission_sync"`
 	HasPassword          bool                  `json:"has_password"`
 	LimitAmount          int                   `json:"limit_amount"`
-	VoiceQuality         int                   `json:"voice_quality"`
+	VoiceQuality         string                `json:"voice_quality"`
 }
 
 // PermissionOverwrite 权限覆写
@@ -107,23 +107,24 @@ type PermissionUser struct {
 
 // Message 消息信息
 type Message struct {
-	ID           string        `json:"id"`
-	Type         int           `json:"type"`
-	Content      string        `json:"content"`
-	Mention      []string      `json:"mention"`
-	MentionAll   bool          `json:"mention_all"`
-	MentionRoles []string      `json:"mention_roles"`
-	MentionHere  bool          `json:"mention_here"`
-	Embeds       []interface{} `json:"embeds"`
-	Attachments  []Attachment  `json:"attachments"`
-	CreateAt     int64         `json:"create_at"`
-	UpdatedAt    int64         `json:"updated_at"`
-	Reactions    []Reaction    `json:"reactions"`
-	Author       User          `json:"author"`
-	ImageName    string        `json:"image_name"`
-	ReadStatus   bool          `json:"read_status"`
-	Quote        *Quote        `json:"quote"`
-	MentionInfo  MentionInfo   `json:"mention_info"`
+	ID           string            `json:"id"`
+	Type         int               `json:"type"`
+	Content      string            `json:"content"`
+	Mention      []string          `json:"mention"`
+	MentionAll   bool              `json:"mention_all"`
+	MentionRoles []string          `json:"mention_roles"`
+	MentionHere  bool              `json:"mention_here"`
+	Embeds       []interface{}     `json:"embeds"`
+	Attachments  AttachmentPayload `json:"attachments"`
+	CreateAt     int64             `json:"create_at"`
+	UpdatedAt    int64             `json:"updated_at"`
+	Reactions    []Reaction        `json:"reactions"`
+	Author       User              `json:"author"`
+	AuthorID     string            `json:"author_id"`
+	ImageName    string            `json:"image_name"`
+	ReadStatus   bool              `json:"read_status"`
+	Quote        *Quote            `json:"quote"`
+	MentionInfo  MentionInfo       `json:"mention_info"`
 }
 
 // Attachment 附件信息
@@ -132,6 +133,31 @@ type Attachment struct {
 	URL  string `json:"url"`
 	Name string `json:"name"`
 	Size int    `json:"size"`
+}
+
+// AttachmentPayload 兼容 KOOK 不同消息接口返回的 attachments 形态。
+type AttachmentPayload []Attachment
+
+// UnmarshalJSON 兼容 object、array、null 和 false。
+func (a *AttachmentPayload) UnmarshalJSON(data []byte) error {
+	switch string(data) {
+	case "null", "false":
+		*a = nil
+		return nil
+	}
+
+	var list []Attachment
+	if err := json.Unmarshal(data, &list); err == nil {
+		*a = list
+		return nil
+	}
+
+	var single Attachment
+	if err := json.Unmarshal(data, &single); err != nil {
+		return err
+	}
+	*a = []Attachment{single}
+	return nil
 }
 
 // Reaction 反应信息

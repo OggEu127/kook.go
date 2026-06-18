@@ -162,7 +162,7 @@ func TestQuickReferenceHTTPAPIsReturnSuccess(t *testing.T) {
 	check(client.Message.GetReactionUserList(ctx, "msg-1", "😀"))
 	check(nil, client.Message.AddReaction(ctx, "msg-1", "😀"))
 	check(nil, client.Message.DeleteReaction(ctx, "msg-1", "😀", "user-1"))
-	check(client.Message.SendPipeMessage(ctx, SendMessageParams{TargetID: "channel-1", Content: "hello"}))
+	check(client.Message.SendPipeMessage(ctx, SendMessageParams{TargetID: "channel-1", Content: "hello", AccessToken: "pipe-token"}))
 
 	check(client.UserChat.GetUserChatList(ctx, 1, 10))
 	check(client.UserChat.GetUserChat(ctx, "chat-1"))

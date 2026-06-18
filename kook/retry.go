@@ -60,7 +60,7 @@ func IsRetryableError(err error) bool {
 	}
 
 	// KOOK API 错误
-	if kookErr, ok := err.(*KOOKError); ok {
+	if kookErr, ok := IsKOOKError(err); ok {
 		return kookErr.IsRetryable()
 	}
 
@@ -75,7 +75,7 @@ func IsRetryableError(err error) bool {
 
 // IsRateLimitError 判断是否为速率限制错误
 func IsRateLimitError(err error) bool {
-	if kookErr, ok := err.(*KOOKError); ok {
+	if kookErr, ok := IsKOOKError(err); ok {
 		return kookErr.IsRateLimited()
 	}
 	if apiErr, ok := err.(*APIError); ok {
@@ -106,6 +106,14 @@ type RetryableFunc func(ctx context.Context) (*Response, error)
 
 // DoWithRetry 执行带重试的操作
 func DoWithRetry(ctx context.Context, fn RetryableFunc, config *RetryConfig, logger Logger) (*Response, error) {
+	if config == nil {
+		config = DefaultRetryConfig()
+	}
+	retryableError := config.RetryableError
+	if retryableError == nil {
+		retryableError = IsRetryableError
+	}
+
 	var lastErr error
 
 	for attempt := 0; attempt <= config.MaxRetries; attempt++ {
@@ -138,9 +146,9 @@ func DoWithRetry(ctx context.Context, fn RetryableFunc, config *RetryConfig, log
 		lastErr = err
 
 		// 检查是否为可重试错误
-		if !config.RetryableError(err) {
+		if !retryableError(err) {
 			logger.Debugf("遇到不可重试错误: %v", err)
-			break
+			return resp, err
 		}
 
 		if attempt == config.MaxRetries {

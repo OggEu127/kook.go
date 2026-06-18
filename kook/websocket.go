@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"sync"
 	"time"
 
@@ -37,13 +39,17 @@ type WebSocketClient struct {
 	isConnected     bool
 	connMu          sync.RWMutex
 	writeMu         sync.Mutex
+	pongTimeout     time.Duration
+	pendingPingSN   int
+	pendingPingMu   sync.Mutex
+	eventBuffer     map[int]*WebSocketMessage
 }
 
 // WebSocketMessage WebSocket消息结构
 type WebSocketMessage struct {
-	S  int             `json:"s"`  // 信令类型
-	D  json.RawMessage `json:"d"`  // 数据
-	SN int             `json:"sn"` // 序号
+	S  int             `json:"s"`           // 信令类型
+	D  json.RawMessage `json:"d,omitempty"` // 数据
+	SN int             `json:"sn"`          // 序号
 }
 
 // HelloMessage Hello消息
@@ -91,6 +97,8 @@ func NewWebSocketClient(client *Client, compress bool) *WebSocketClient {
 		compress:       compress,
 		maxReconnects:  10,
 		reconnectDelay: 5 * time.Second,
+		pongTimeout:    6 * time.Second,
+		eventBuffer:    make(map[int]*WebSocketMessage),
 	}
 }
 
@@ -133,26 +141,28 @@ func (ws *WebSocketClient) connectWithRetry() error {
 
 // doConnect 执行实际连接
 func (ws *WebSocketClient) doConnect() error {
-	// 获取网关信息
 	compress := 0
 	if ws.compress {
 		compress = 1
 	}
 
-	gateway, err := ws.client.Gateway.GetGateway(ws.ctx, compress)
-	if err != nil {
-		return fmt.Errorf("获取网关信息失败: %w", err)
+	connectURL := ws.resumeGatewayURL()
+	if connectURL == "" {
+		gateway, err := ws.client.Gateway.GetGateway(ws.ctx, compress)
+		if err != nil {
+			return fmt.Errorf("获取网关信息失败: %w", err)
+		}
+		ws.gatewayURL = gateway.URL
+		connectURL = gateway.URL
 	}
-
-	ws.gatewayURL = gateway.URL
 
 	// 创建WebSocket连接
 	header := http.Header{}
 	header.Set("Authorization", fmt.Sprintf("%s %s", ws.client.tokenType, ws.client.token))
 
-	ws.client.logger.Infof("连接到WebSocket网关: %s", gateway.URL)
+	ws.client.logger.Infof("连接到WebSocket网关: %s", connectURL)
 
-	conn, _, err := websocket.DefaultDialer.Dial(gateway.URL, header)
+	conn, _, err := websocket.DefaultDialer.Dial(connectURL, header)
 	if err != nil {
 		return fmt.Errorf("WebSocket连接失败: %w", err)
 	}
@@ -170,6 +180,27 @@ func (ws *WebSocketClient) doConnect() error {
 	return nil
 }
 
+func (ws *WebSocketClient) resumeGatewayURL() string {
+	sessionID := ws.getSessionID()
+	sn := ws.getSN()
+	if ws.gatewayURL == "" || sessionID == "" || sn <= 0 {
+		return ""
+	}
+
+	u, err := url.Parse(ws.gatewayURL)
+	if err != nil {
+		ws.client.logger.WithError(err).Warn("解析WebSocket resume URL失败，将重新获取gateway")
+		return ""
+	}
+
+	q := u.Query()
+	q.Set("resume", "1")
+	q.Set("sn", strconv.Itoa(sn))
+	q.Set("session_id", sessionID)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
 // Close 关闭WebSocket连接
 func (ws *WebSocketClient) Close() error {
 	ws.cancel()
@@ -177,6 +208,7 @@ func (ws *WebSocketClient) Close() error {
 	if ws.heartbeatTicker != nil {
 		ws.heartbeatTicker.Stop()
 	}
+	ws.clearPendingPing()
 
 	ws.connMu.RLock()
 	conn := ws.conn
@@ -311,16 +343,17 @@ func (ws *WebSocketClient) handleMessage(msg *WebSocketMessage) error {
 		return ws.handleResumeAck(msg)
 	case SignalPong:
 		// 处理Pong消息
-		var pong PongMessage
-		if msg.D != nil {
+		pongSN := msg.SN
+		if pongSN == 0 && msg.D != nil {
+			var pong PongMessage
 			if err := json.Unmarshal(msg.D, &pong); err != nil {
 				ws.client.logger.WithError(err).Debug("解析Pong消息失败，可能是空的Pong")
 			} else {
-				ws.client.logger.Debugf("收到Pong响应，SN: %d", pong.SN)
+				pongSN = pong.SN
 			}
-		} else {
-			ws.client.logger.Debug("收到Pong响应")
 		}
+		ws.client.logger.Debugf("收到Pong响应，SN: %d", pongSN)
+		ws.ackPendingPing(pongSN)
 		return nil
 	default:
 		ws.client.logger.Warnf("收到未知信令类型: %d", msg.S)
@@ -331,12 +364,59 @@ func (ws *WebSocketClient) handleMessage(msg *WebSocketMessage) error {
 
 // handleEvent 处理事件消息
 func (ws *WebSocketClient) handleEvent(msg *WebSocketMessage) error {
+	if msg.SN > 0 {
+		return ws.handleOrderedEvent(msg)
+	}
+
+	return ws.dispatchEvent(msg)
+}
+
+func (ws *WebSocketClient) handleOrderedEvent(msg *WebSocketMessage) error {
+	ws.stateMu.Lock()
+	currentSN := ws.sn
+	if msg.SN <= currentSN {
+		ws.stateMu.Unlock()
+		ws.client.logger.Debugf("丢弃旧事件SN: %d，当前SN: %d", msg.SN, currentSN)
+		return nil
+	}
+	if msg.SN > currentSN+1 {
+		ws.eventBuffer[msg.SN] = msg
+		ws.stateMu.Unlock()
+		ws.client.logger.Warnf("收到乱序事件SN: %d，当前SN: %d，已缓冲", msg.SN, currentSN)
+		return nil
+	}
+	ws.stateMu.Unlock()
+
+	if err := ws.dispatchEvent(msg); err != nil {
+		return err
+	}
+
+	for {
+		ws.stateMu.Lock()
+		nextSN := ws.sn + 1
+		next := ws.eventBuffer[nextSN]
+		if next == nil {
+			ws.stateMu.Unlock()
+			return nil
+		}
+		delete(ws.eventBuffer, nextSN)
+		ws.stateMu.Unlock()
+
+		if err := ws.dispatchEvent(next); err != nil {
+			return err
+		}
+	}
+}
+
+func (ws *WebSocketClient) dispatchEvent(msg *WebSocketMessage) error {
 	var event Event
 	if err := json.Unmarshal(msg.D, &event); err != nil {
 		return fmt.Errorf("解析事件失败: %w", err)
 	}
 
-	ws.setSN(msg.SN)
+	if msg.SN > 0 {
+		ws.setSN(msg.SN)
+	}
 	ws.client.logger.Debugf("收到事件: 类型=%d, 内容=%s", event.Type, event.Content)
 
 	// 调用事件处理器
@@ -345,7 +425,7 @@ func (ws *WebSocketClient) handleEvent(msg *WebSocketMessage) error {
 	ws.mu.RUnlock()
 
 	for _, handler := range handlers {
-		go func(h EventHandler) {
+		func(h EventHandler) {
 			defer func() {
 				if r := recover(); r != nil {
 					ws.client.logger.Errorf("事件处理器发生panic: %v", r)
@@ -380,19 +460,20 @@ func (ws *WebSocketClient) handleHello(msg *WebSocketMessage) error {
 
 // handlePing 处理Ping消息
 func (ws *WebSocketClient) handlePing(msg *WebSocketMessage) error {
-	var ping PingMessage
-	if err := json.Unmarshal(msg.D, &ping); err != nil {
-		return fmt.Errorf("解析Ping消息失败: %w", err)
+	pingSN := msg.SN
+	if pingSN == 0 && msg.D != nil {
+		var ping PingMessage
+		if err := json.Unmarshal(msg.D, &ping); err != nil {
+			return fmt.Errorf("解析Ping消息失败: %w", err)
+		}
+		pingSN = ping.SN
 	}
 
 	// 发送Pong响应
 	pong := WebSocketMessage{
-		S: SignalPong,
-		D: nil,
+		S:  SignalPong,
+		SN: pingSN,
 	}
-
-	pongData, _ := json.Marshal(PongMessage{SN: ping.SN})
-	pong.D = pongData
 
 	return ws.sendMessage(&pong)
 }
@@ -400,19 +481,16 @@ func (ws *WebSocketClient) handlePing(msg *WebSocketMessage) error {
 // handleReconnect 处理重连消息
 func (ws *WebSocketClient) handleReconnect(msg *WebSocketMessage) error {
 	ws.client.logger.Warn("服务器要求重连")
+	ws.resetSessionStateForFreshReconnect()
 
-	// 发送Resume消息
-	resume := WebSocketMessage{
-		S: SignalResume,
+	ws.connMu.Lock()
+	if ws.conn != nil {
+		_ = ws.conn.Close()
 	}
+	ws.isConnected = false
+	ws.connMu.Unlock()
 
-	resumeData, _ := json.Marshal(ResumeMessage{
-		SessionID: ws.getSessionID(),
-		SN:        ws.getSN(),
-	})
-	resume.D = resumeData
-
-	return ws.sendMessage(&resume)
+	return nil
 }
 
 // handleResumeAck 处理重连确认消息
@@ -442,11 +520,9 @@ func (ws *WebSocketClient) startHeartbeat() {
 				return
 			case <-ws.heartbeatTicker.C:
 				ping := WebSocketMessage{
-					S: SignalPing,
+					S:  SignalPing,
+					SN: ws.getSN(),
 				}
-
-				pingData, _ := json.Marshal(PingMessage{SN: ws.getSN()})
-				ping.D = pingData
 
 				if err := ws.sendMessage(&ping); err != nil {
 					consecutiveFailures++
@@ -464,6 +540,7 @@ func (ws *WebSocketClient) startHeartbeat() {
 						return
 					}
 				} else {
+					ws.trackPendingPing(ping.SN)
 					if consecutiveFailures > 0 {
 						ws.client.logger.Info("心跳恢复正常")
 					}
@@ -472,6 +549,43 @@ func (ws *WebSocketClient) startHeartbeat() {
 			}
 		}
 	}()
+}
+
+func (ws *WebSocketClient) trackPendingPing(sn int) {
+	ws.pendingPingMu.Lock()
+	ws.pendingPingSN = sn
+	ws.pendingPingMu.Unlock()
+
+	time.AfterFunc(ws.pongTimeout, func() {
+		ws.pendingPingMu.Lock()
+		pending := ws.pendingPingSN == sn
+		ws.pendingPingMu.Unlock()
+		if !pending || ws.ctx.Err() != nil {
+			return
+		}
+
+		ws.client.logger.Errorf("WebSocket Pong超时，SN: %d", sn)
+		ws.connMu.Lock()
+		ws.isConnected = false
+		if ws.conn != nil {
+			_ = ws.conn.Close()
+		}
+		ws.connMu.Unlock()
+	})
+}
+
+func (ws *WebSocketClient) clearPendingPing() {
+	ws.pendingPingMu.Lock()
+	ws.pendingPingSN = 0
+	ws.pendingPingMu.Unlock()
+}
+
+func (ws *WebSocketClient) ackPendingPing(sn int) {
+	ws.pendingPingMu.Lock()
+	if ws.pendingPingSN == sn || sn == 0 {
+		ws.pendingPingSN = 0
+	}
+	ws.pendingPingMu.Unlock()
 }
 
 // sendMessage 发送WebSocket消息
@@ -524,6 +638,16 @@ func (ws *WebSocketClient) setReconnectCount(count int) {
 	ws.stateMu.Lock()
 	defer ws.stateMu.Unlock()
 	ws.reconnectCount = count
+}
+
+func (ws *WebSocketClient) resetSessionStateForFreshReconnect() {
+	ws.stateMu.Lock()
+	ws.sn = 0
+	ws.sessionID = ""
+	ws.gatewayURL = ""
+	ws.eventBuffer = make(map[int]*WebSocketMessage)
+	ws.stateMu.Unlock()
+	ws.clearPendingPing()
 }
 
 func (ws *WebSocketClient) getReconnectCount() int {

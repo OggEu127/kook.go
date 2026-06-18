@@ -1,6 +1,7 @@
 package kook
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -12,6 +13,8 @@ type RateLimiter struct {
 	lastRefill time.Time
 	rate       time.Duration
 	burst      int
+	done       chan struct{}
+	closeOnce  sync.Once
 }
 
 // NewRateLimiter 创建新的速率限制器
@@ -23,6 +26,7 @@ func NewRateLimiter(rate time.Duration, burst int) *RateLimiter {
 		lastRefill: time.Now(),
 		rate:       rate,
 		burst:      burst,
+		done:       make(chan struct{}),
 	}
 
 	// 初始填满令牌桶
@@ -40,8 +44,13 @@ func NewRateLimiter(rate time.Duration, burst int) *RateLimiter {
 }
 
 // Wait 等待获取令牌
-func (rl *RateLimiter) Wait() {
-	<-rl.tokens
+func (rl *RateLimiter) Wait(ctx context.Context) error {
+	select {
+	case <-rl.tokens:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // TryAcquire 尝试获取令牌，不等待
@@ -54,22 +63,42 @@ func (rl *RateLimiter) TryAcquire() bool {
 	}
 }
 
+// Release 归还已获取的令牌。
+func (rl *RateLimiter) Release() {
+	select {
+	case rl.tokens <- struct{}{}:
+	default:
+	}
+}
+
+// Close 停止令牌补充协程。
+func (rl *RateLimiter) Close() {
+	rl.closeOnce.Do(func() {
+		close(rl.done)
+	})
+}
+
 // refillLoop 令牌补充循环
 func (rl *RateLimiter) refillLoop() {
 	ticker := time.NewTicker(rl.rate)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		rl.refillMu.Lock()
-		// 尝试添加一个令牌
+	for {
 		select {
-		case rl.tokens <- struct{}{}:
-			// 成功添加令牌
-		default:
-			// 令牌桶已满
+		case <-ticker.C:
+			rl.refillMu.Lock()
+			// 尝试添加一个令牌
+			select {
+			case rl.tokens <- struct{}{}:
+				// 成功添加令牌
+			default:
+				// 令牌桶已满
+			}
+			rl.lastRefill = time.Now()
+			rl.refillMu.Unlock()
+		case <-rl.done:
+			return
 		}
-		rl.lastRefill = time.Now()
-		rl.refillMu.Unlock()
 	}
 }
 
@@ -91,13 +120,22 @@ func NewEndpointRateLimiter(rate time.Duration, burst int) *EndpointRateLimiter 
 }
 
 // Wait 等待指定端点的令牌
-func (erl *EndpointRateLimiter) Wait(endpoint string) {
-	erl.getLimiter(endpoint).Wait()
+func (erl *EndpointRateLimiter) Wait(ctx context.Context, endpoint string) error {
+	return erl.getLimiter(endpoint).Wait(ctx)
 }
 
 // TryAcquire 尝试获取指定端点的令牌
 func (erl *EndpointRateLimiter) TryAcquire(endpoint string) bool {
 	return erl.getLimiter(endpoint).TryAcquire()
+}
+
+// Close 停止所有端点限流器。
+func (erl *EndpointRateLimiter) Close() {
+	erl.mu.RLock()
+	defer erl.mu.RUnlock()
+	for _, limiter := range erl.limiters {
+		limiter.Close()
+	}
 }
 
 // getLimiter 获取或创建端点的速率限制器
@@ -141,11 +179,17 @@ func NewGlobalRateLimiter() *GlobalRateLimiter {
 }
 
 // Wait 等待令牌（同时检查全局和端点限制）
-func (grl *GlobalRateLimiter) Wait(endpoint string) {
+func (grl *GlobalRateLimiter) Wait(ctx context.Context, endpoint string) error {
 	// 先等待全局限制
-	grl.generalLimiter.Wait()
+	if err := grl.generalLimiter.Wait(ctx); err != nil {
+		return err
+	}
 	// 再等待端点限制
-	grl.endpointLimiter.Wait(endpoint)
+	if err := grl.endpointLimiter.Wait(ctx, endpoint); err != nil {
+		grl.generalLimiter.Release()
+		return err
+	}
+	return nil
 }
 
 // TryAcquire 尝试获取令牌
@@ -156,8 +200,21 @@ func (grl *GlobalRateLimiter) TryAcquire(endpoint string) bool {
 	}
 	if !grl.endpointLimiter.TryAcquire(endpoint) {
 		// 如果端点限制失败，需要把全局令牌还回去
-		// 这里简化处理，直接返回失败
+		grl.generalLimiter.Release()
 		return false
 	}
 	return true
+}
+
+// Close 停止全局和端点限流器。
+func (grl *GlobalRateLimiter) Close() {
+	if grl == nil {
+		return
+	}
+	if grl.generalLimiter != nil {
+		grl.generalLimiter.Close()
+	}
+	if grl.endpointLimiter != nil {
+		grl.endpointLimiter.Close()
+	}
 }

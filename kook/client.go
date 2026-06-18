@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strings"
@@ -133,8 +134,17 @@ func WithoutRetry() ClientOption {
 
 // NewClient 创建新的KOOK客户端
 func NewClient(token string, options ...ClientOption) *Client {
+	client, err := NewClientWithError(token, options...)
+	if err != nil {
+		panic(err.Error())
+	}
+	return client
+}
+
+// NewClientWithError 创建新的KOOK客户端，并将配置错误返回给调用方。
+func NewClientWithError(token string, options ...ClientOption) (*Client, error) {
 	if token == "" {
-		panic("token不能为空")
+		return nil, fmt.Errorf("token不能为空")
 	}
 
 	// 默认HTTP客户端
@@ -193,7 +203,15 @@ func NewClient(token string, options ...ClientOption) *Client {
 	client.Coupon = &CouponService{client: client}
 	client.Boost = &BoostService{client: client}
 
-	return client
+	return client, nil
+}
+
+// Close 释放客户端内部后台资源。
+func (c *Client) Close() error {
+	if c.rateLimiter != nil {
+		c.rateLimiter.Close()
+	}
+	return nil
 }
 
 // buildURL 构建完整的API URL
@@ -210,11 +228,119 @@ func (c *Client) doRequest(ctx context.Context, method, endpoint string, params 
 	}, c.retryConfig, c.logger)
 }
 
+func (c *Client) doMultipartRequest(ctx context.Context, endpoint string, fields map[string]string, files map[string]multipartFile, query map[string]string) (*Response, error) {
+	return DoWithRetry(ctx, func(ctx context.Context) (*Response, error) {
+		return c.doSingleMultipartRequest(ctx, endpoint, fields, files, query)
+	}, c.retryConfig, c.logger)
+}
+
+type multipartFile struct {
+	FileName string
+	Content  []byte
+}
+
+func (c *Client) doSingleMultipartRequest(ctx context.Context, endpoint string, fields map[string]string, files map[string]multipartFile, query map[string]string) (*Response, error) {
+	if c.rateLimiter != nil {
+		if err := c.rateLimiter.Wait(ctx, endpoint); err != nil {
+			return nil, fmt.Errorf("等待速率限制失败: %w", err)
+		}
+	}
+
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	for name, value := range fields {
+		if err := writer.WriteField(name, value); err != nil {
+			return nil, fmt.Errorf("写入表单字段失败: %w", err)
+		}
+	}
+	for field, file := range files {
+		part, err := writer.CreateFormFile(field, file.FileName)
+		if err != nil {
+			return nil, fmt.Errorf("创建表单文件失败: %w", err)
+		}
+		if _, err := part.Write(file.Content); err != nil {
+			return nil, fmt.Errorf("写入文件内容失败: %w", err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		return nil, fmt.Errorf("关闭multipart表单失败: %w", err)
+	}
+
+	requestURL := c.buildURL(endpoint)
+	if len(query) > 0 {
+		u, err := url.Parse(requestURL)
+		if err != nil {
+			return nil, fmt.Errorf("解析URL失败: %w", err)
+		}
+		q := u.Query()
+		for k, v := range query {
+			q.Set(k, v)
+		}
+		u.RawQuery = q.Encode()
+		requestURL = u.String()
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, &buf)
+	if err != nil {
+		return nil, fmt.Errorf("创建请求失败: %w", err)
+	}
+	req.Header.Set("Authorization", fmt.Sprintf("%s %s", c.tokenType, c.token))
+	req.Header.Set("User-Agent", UserAgent)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Accept-Language", "zh-cn")
+
+	c.logger.WithFields(logrus.Fields{
+		"method":  http.MethodPost,
+		"url":     requestURL,
+		"headers": redactedHeaders(req.Header),
+	}).Debugf("发送multipart API请求")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		c.logger.WithError(err).Errorf("请求失败")
+		return nil, fmt.Errorf("请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		c.logger.WithError(err).Errorf("读取响应失败")
+		return nil, fmt.Errorf("读取响应失败: %w", err)
+	}
+
+	c.logger.WithFields(logrus.Fields{
+		"status": resp.StatusCode,
+		"body":   string(respBody),
+	}).Debugf("收到multipart API响应")
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		err := NewKOOKErrorFromResponse(resp, respBody).WithContext(http.MethodPost, endpoint)
+		c.logger.WithError(err).Errorf("HTTP返回错误")
+		return nil, err
+	}
+
+	var response Response
+	if err := json.Unmarshal(respBody, &response); err != nil {
+		c.logger.WithError(err).Errorf("解析响应失败")
+		return nil, fmt.Errorf("解析响应失败: %w", err)
+	}
+	if response.Code != 0 {
+		err := NewKOOKError(response.Code, response.Message).WithContext(http.MethodPost, endpoint)
+		err.HTTPStatus = resp.StatusCode
+		c.logger.WithError(err).Errorf("API返回错误")
+		return &response, err
+	}
+
+	return &response, nil
+}
+
 // doSingleRequest 执行单次HTTP请求
 func (c *Client) doSingleRequest(ctx context.Context, method, endpoint string, params map[string]interface{}, query map[string]string) (*Response, error) {
 	// 应用速率限制
 	if c.rateLimiter != nil {
-		c.rateLimiter.Wait(endpoint)
+		if err := c.rateLimiter.Wait(ctx, endpoint); err != nil {
+			return nil, fmt.Errorf("等待速率限制失败: %w", err)
+		}
 	}
 
 	requestURL := c.buildURL(endpoint)
@@ -260,7 +386,7 @@ func (c *Client) doSingleRequest(ctx context.Context, method, endpoint string, p
 	c.logger.WithFields(logrus.Fields{
 		"method":  method,
 		"url":     requestURL,
-		"headers": req.Header,
+		"headers": redactedHeaders(req.Header),
 	}).Debugf("发送API请求")
 
 	// 执行请求
@@ -282,6 +408,12 @@ func (c *Client) doSingleRequest(ctx context.Context, method, endpoint string, p
 		"status": resp.StatusCode,
 		"body":   string(respBody),
 	}).Debugf("收到API响应")
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		err := NewKOOKErrorFromResponse(resp, respBody).WithContext(method, endpoint)
+		c.logger.WithError(err).Errorf("HTTP返回错误")
+		return nil, err
+	}
 
 	// 解析响应
 	var response Response
@@ -315,6 +447,14 @@ func (c *Client) doSingleRequest(ctx context.Context, method, endpoint string, p
 
 	c.logger.Infof("API请求成功: %s %s", method, requestURL)
 	return &response, nil
+}
+
+func redactedHeaders(headers http.Header) http.Header {
+	redacted := headers.Clone()
+	if redacted.Get("Authorization") != "" {
+		redacted.Set("Authorization", "[REDACTED]")
+	}
+	return redacted
 }
 
 // Get 发送GET请求

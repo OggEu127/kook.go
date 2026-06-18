@@ -82,6 +82,21 @@ func (s *ChannelService) CreateChannel(ctx context.Context, guildID string, para
 		"name":     params.Name,
 	}
 
+	if params.IsCategory {
+		requestParams["is_category"] = 1
+		resp, err := s.client.Post(ctx, "channel/create", requestParams)
+		if err != nil {
+			return nil, err
+		}
+
+		var channel Channel
+		if err := json.Unmarshal(resp.Data, &channel); err != nil {
+			return nil, fmt.Errorf("解析频道信息失败: %w", err)
+		}
+
+		return &channel, nil
+	}
+
 	if params.Type > 0 {
 		requestParams["type"] = params.Type
 	} else {
@@ -94,11 +109,8 @@ func (s *ChannelService) CreateChannel(ctx context.Context, guildID string, para
 	if params.LimitAmount > 0 {
 		requestParams["limit_amount"] = params.LimitAmount
 	}
-	if params.VoiceQuality > 0 {
+	if params.VoiceQuality != "" {
 		requestParams["voice_quality"] = params.VoiceQuality
-	}
-	if params.IsCategory {
-		requestParams["is_category"] = 1
 	}
 
 	resp, err := s.client.Post(ctx, "channel/create", requestParams)
@@ -136,7 +148,7 @@ func (s *ChannelService) UpdateChannel(ctx context.Context, channelID string, pa
 	if params.LimitAmount > 0 {
 		requestParams["limit_amount"] = params.LimitAmount
 	}
-	if params.VoiceQuality > 0 {
+	if params.VoiceQuality != "" {
 		requestParams["voice_quality"] = params.VoiceQuality
 	}
 	if params.Password != "" {
@@ -412,7 +424,7 @@ type CreateChannelParams struct {
 	Type         int    `json:"type,omitempty"`          // 频道类型：1文字，2语音
 	ParentID     string `json:"parent_id,omitempty"`     // 父分组ID
 	LimitAmount  int    `json:"limit_amount,omitempty"`  // 语音频道人数限制
-	VoiceQuality int    `json:"voice_quality,omitempty"` // 语音质量
+	VoiceQuality string `json:"voice_quality,omitempty"` // 语音质量
 	IsCategory   bool   `json:"is_category,omitempty"`   // 是否为分组
 }
 
@@ -422,7 +434,7 @@ type UpdateChannelParams struct {
 	Topic        string `json:"topic,omitempty"`         // 频道主题
 	SlowMode     int    `json:"slow_mode,omitempty"`     // 慢速模式（秒）
 	LimitAmount  int    `json:"limit_amount,omitempty"`  // 语音频道人数限制
-	VoiceQuality int    `json:"voice_quality,omitempty"` // 语音质量
+	VoiceQuality string `json:"voice_quality,omitempty"` // 语音质量
 	Password     string `json:"password,omitempty"`      // 频道密码
 }
 

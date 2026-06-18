@@ -459,6 +459,9 @@ func (s *MessageService) CheckCard(ctx context.Context, content string) (*CheckC
 
 // SendPipeMessage 通过 Pipe 发送频道消息
 func (s *MessageService) SendPipeMessage(ctx context.Context, params SendMessageParams) (*Message, error) {
+	if params.AccessToken == "" {
+		return nil, fmt.Errorf("Pipe消息 access_token 不能为空")
+	}
 	if params.TargetID == "" {
 		return nil, fmt.Errorf("频道消息目标ID不能为空")
 	}
@@ -476,10 +479,14 @@ func (s *MessageService) SendPipeMessage(ctx context.Context, params SendMessage
 		}
 	}
 
+	query := map[string]string{
+		"access_token": params.AccessToken,
+		"target_id":    params.TargetID,
+		"type":         strconv.Itoa(msgType),
+	}
+
 	requestParams := map[string]interface{}{
-		"target_id": params.TargetID,
-		"content":   params.Content,
-		"type":      msgType,
+		"content": params.Content,
 	}
 	if params.Quote != "" {
 		requestParams["quote"] = params.Quote
@@ -487,8 +494,11 @@ func (s *MessageService) SendPipeMessage(ctx context.Context, params SendMessage
 	if params.Nonce != "" {
 		requestParams["nonce"] = params.Nonce
 	}
+	if params.TemplateID != "" {
+		requestParams["template_id"] = params.TemplateID
+	}
 
-	resp, err := s.client.Post(ctx, "message/send-pipemsg", requestParams)
+	resp, err := s.client.doRequest(ctx, "POST", "message/send-pipemsg", requestParams, query)
 	if err != nil {
 		return nil, err
 	}
@@ -517,6 +527,7 @@ type SendMessageParams struct {
 	ChatCode     string `json:"chat_code,omitempty"`      // 私聊会话Code（私聊可选，和TargetID二选一）
 	Content      string `json:"content"`                  // 消息内容
 	MsgType      int    `json:"msg_type,omitempty"`       // 消息类型（1文本，9KMarkdown，10卡片）
+	AccessToken  string `json:"access_token,omitempty"`   // Pipe消息 access_token
 	Quote        string `json:"quote,omitempty"`          // 引用消息ID
 	Nonce        string `json:"nonce,omitempty"`          // 随机字符串，防重复
 	TempTargetID string `json:"temp_target_id,omitempty"` // 临时目标ID

@@ -2,6 +2,7 @@ package kook
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -226,7 +227,8 @@ func NewValidationErrorWithValue(field, message, value string) *ValidationError 
 
 // IsKOOKError 检查是否为 KOOK 错误
 func IsKOOKError(err error) (*KOOKError, bool) {
-	if kookErr, ok := err.(*KOOKError); ok {
+	var kookErr *KOOKError
+	if errors.As(err, &kookErr) {
 		return kookErr, true
 	}
 	return nil, false
@@ -234,7 +236,8 @@ func IsKOOKError(err error) (*KOOKError, bool) {
 
 // IsValidationError 检查是否为验证错误
 func IsValidationError(err error) (*ValidationError, bool) {
-	if validationErr, ok := err.(*ValidationError); ok {
+	var validationErr *ValidationError
+	if errors.As(err, &validationErr) {
 		return validationErr, true
 	}
 	return nil, false
