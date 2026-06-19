@@ -457,15 +457,29 @@ func (s *MessageService) CheckCard(ctx context.Context, content string) (*CheckC
 	return &result, nil
 }
 
-// SendPipeMessage 通过 Pipe 发送频道消息
+// SendPipeMessage 通过 Pipe 发送频道消息。
+//
+// Deprecated: 请使用 SendPipe，并传入 SendPipeMessageParams 以区分普通内容和模板输入。
 func (s *MessageService) SendPipeMessage(ctx context.Context, params SendMessageParams) (*Message, error) {
+	return s.SendPipe(ctx, SendPipeMessageParams{
+		AccessToken: params.AccessToken,
+		TargetID:    params.TargetID,
+		MsgType:     params.MsgType,
+		Content:     params.Content,
+		Quote:       params.Quote,
+		Nonce:       params.Nonce,
+	})
+}
+
+// SendPipe 通过 Pipe 发送频道消息。
+func (s *MessageService) SendPipe(ctx context.Context, params SendPipeMessageParams) (*Message, error) {
 	if params.AccessToken == "" {
 		return nil, fmt.Errorf("Pipe消息 access_token 不能为空")
 	}
 	if params.TargetID == "" {
 		return nil, fmt.Errorf("频道消息目标ID不能为空")
 	}
-	if params.Content == "" {
+	if params.TemplateInput == nil && params.Content == "" {
 		return nil, fmt.Errorf("消息内容不能为空")
 	}
 
@@ -485,17 +499,17 @@ func (s *MessageService) SendPipeMessage(ctx context.Context, params SendMessage
 		"type":         strconv.Itoa(msgType),
 	}
 
-	requestParams := map[string]interface{}{
-		"content": params.Content,
-	}
-	if params.Quote != "" {
-		requestParams["quote"] = params.Quote
-	}
-	if params.Nonce != "" {
-		requestParams["nonce"] = params.Nonce
-	}
-	if params.TemplateID != "" {
-		requestParams["template_id"] = params.TemplateID
+	requestParams := params.TemplateInput
+	if requestParams == nil {
+		requestParams = map[string]interface{}{
+			"content": params.Content,
+		}
+		if params.Quote != "" {
+			requestParams["quote"] = params.Quote
+		}
+		if params.Nonce != "" {
+			requestParams["nonce"] = params.Nonce
+		}
 	}
 
 	resp, err := s.client.doRequest(ctx, "POST", "message/send-pipemsg", requestParams, query)
@@ -518,6 +532,17 @@ func (s *MessageService) SendPipeMessage(ctx context.Context, params SendMessage
 		Content:  params.Content,
 		CreateAt: created.MsgTimestamp,
 	}, nil
+}
+
+// SendPipeMessageParams Pipe 消息参数。
+type SendPipeMessageParams struct {
+	AccessToken   string                 `json:"access_token,omitempty"`   // Pipe access_token
+	TargetID      string                 `json:"target_id,omitempty"`      // 频道ID
+	MsgType       int                    `json:"msg_type,omitempty"`       // 消息类型，默认KMarkdown
+	Content       string                 `json:"content,omitempty"`        // 普通 Pipe 消息内容
+	TemplateInput map[string]interface{} `json:"template_input,omitempty"` // 模板模式下直接作为POST body
+	Quote         string                 `json:"quote,omitempty"`          // 引用消息ID
+	Nonce         string                 `json:"nonce,omitempty"`          // 随机字符串
 }
 
 // SendMessageParams 发送消息参数

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -171,7 +172,7 @@ func TestWebSocketReconnectSignalResetsSessionAndClosesConnection(t *testing.T) 
 	ws.gatewayURL = "wss://gateway.example.test/socket"
 	ws.setSessionID("session-1")
 	ws.setSN(7)
-	ws.eventBuffer[8] = &WebSocketMessage{S: SignalEvent, SN: 8}
+	ws.eventBuffer[8] = bufferedEvent{msg: &WebSocketMessage{S: SignalEvent, SN: 8}, created: time.Now()}
 
 	if err := ws.handleReconnect(&WebSocketMessage{S: SignalReconnect}); err != nil {
 		t.Fatalf("handleReconnect: %v", err)
@@ -213,6 +214,79 @@ func TestWebSocketEventsAreDispatchedInSNOrder(t *testing.T) {
 	}
 	if ws.getSN() != 2 {
 		t.Fatalf("SN = %d, want 2", ws.getSN())
+	}
+}
+
+func TestWebSocketEventBufferRejectsOverflowAndDuplicate(t *testing.T) {
+	ws := NewWebSocketClient(NewClient("test-token", WithoutRateLimit(), WithoutRetry()), false, WebSocketOptions{
+		MaxEventBuffer: 1,
+	})
+	event := mustRawMessage(t, Event{Type: EventTypeTextMessage, Content: "buffered"})
+
+	if err := ws.handleEvent(&WebSocketMessage{S: SignalEvent, SN: 3, D: event}); err != nil {
+		t.Fatalf("first buffered event returned error: %v", err)
+	}
+	if len(ws.eventBuffer) != 1 {
+		t.Fatalf("buffer len = %d, want 1", len(ws.eventBuffer))
+	}
+	if err := ws.handleEvent(&WebSocketMessage{S: SignalEvent, SN: 3, D: event}); err != nil {
+		t.Fatalf("duplicate buffered event returned error: %v", err)
+	}
+	if len(ws.eventBuffer) != 1 {
+		t.Fatalf("buffer len after duplicate = %d, want 1", len(ws.eventBuffer))
+	}
+	if err := ws.handleEvent(&WebSocketMessage{S: SignalEvent, SN: 4, D: event}); !errors.Is(err, ErrEventBufferFull) {
+		t.Fatalf("overflow error = %v, want ErrEventBufferFull", err)
+	}
+}
+
+func TestWebSocketEventBufferTTLExpiresStaleGap(t *testing.T) {
+	ws := NewWebSocketClient(NewClient("test-token", WithoutRateLimit(), WithoutRetry()), false, WebSocketOptions{
+		EventBufferTTL: time.Millisecond,
+	})
+	received := make(chan string, 1)
+	ws.OnEvent(EventTypeTextMessage, func(event *Event) {
+		received <- event.Content
+	})
+	event := mustRawMessage(t, Event{Type: EventTypeTextMessage, Content: "fresh"})
+
+	ws.eventBuffer[2] = bufferedEvent{
+		msg:     &WebSocketMessage{S: SignalEvent, SN: 2, D: event},
+		created: time.Now().Add(-time.Second),
+	}
+	if err := ws.handleEvent(&WebSocketMessage{S: SignalEvent, SN: 3, D: event}); err != nil {
+		t.Fatalf("handle event after stale gap: %v", err)
+	}
+	if got := readEventContent(t, received); got != "fresh" {
+		t.Fatalf("event content = %q, want fresh", got)
+	}
+	if ws.getSN() != 3 {
+		t.Fatalf("SN = %d, want 3", ws.getSN())
+	}
+}
+
+func TestWebSocketDispatchCopiesHandlerSlice(t *testing.T) {
+	ws := NewWebSocketClient(NewClient("test-token", WithoutRateLimit(), WithoutRetry()), false)
+	calls := 0
+	ws.OnEvent(EventTypeTextMessage, func(event *Event) {
+		calls++
+		ws.OnEvent(EventTypeTextMessage, func(event *Event) {
+			calls++
+		})
+	})
+
+	event := mustRawMessage(t, Event{Type: EventTypeTextMessage, Content: "hello"})
+	if err := ws.handleEvent(&WebSocketMessage{S: SignalEvent, SN: 1, D: event}); err != nil {
+		t.Fatalf("handle first event: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("calls after first event = %d, want 1", calls)
+	}
+	if err := ws.handleEvent(&WebSocketMessage{S: SignalEvent, SN: 2, D: event}); err != nil {
+		t.Fatalf("handle second event: %v", err)
+	}
+	if calls != 3 {
+		t.Fatalf("calls after second event = %d, want 3", calls)
 	}
 }
 
@@ -430,6 +504,64 @@ func TestWebSocketPingAndPongUseTopLevelSN(t *testing.T) {
 	}
 }
 
+func TestWebSocketOptionsDefaultsAndOverrides(t *testing.T) {
+	defaults := DefaultWebSocketOptions()
+	if defaults.ReadLimit != 8<<20 || defaults.ReadTimeout != 90*time.Second || defaults.HelloTimeout != 6*time.Second ||
+		defaults.PongTimeout != 6*time.Second || defaults.MaxEventBuffer != 1024 || defaults.EventBufferTTL != 30*time.Second {
+		t.Fatalf("unexpected defaults: %#v", defaults)
+	}
+
+	ws := NewWebSocketClient(NewClient("test-token", WithoutRateLimit(), WithoutRetry()), false, WebSocketOptions{
+		ReadLimit:      64,
+		ReadTimeout:    time.Second,
+		HelloTimeout:   2 * time.Second,
+		PongTimeout:    3 * time.Second,
+		MaxEventBuffer: 4,
+		EventBufferTTL: 5 * time.Second,
+	})
+	if ws.options.ReadLimit != 64 || ws.options.ReadTimeout != time.Second || ws.options.HelloTimeout != 2*time.Second ||
+		ws.options.PongTimeout != 3*time.Second || ws.options.MaxEventBuffer != 4 || ws.options.EventBufferTTL != 5*time.Second {
+		t.Fatalf("unexpected options: %#v", ws.options)
+	}
+}
+
+func TestWebSocketReadLimitClosesOversizedMessages(t *testing.T) {
+	serverConnCh := make(chan *websocket.Conn, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		serverConnCh <- conn
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + server.URL[len("http"):]
+	clientConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer clientConn.Close()
+	serverConn := <-serverConnCh
+	defer serverConn.Close()
+
+	ws := NewWebSocketClient(NewClient("test-token", WithoutRateLimit(), WithoutRetry()), false, WebSocketOptions{
+		ReadLimit:   16,
+		ReadTimeout: time.Second,
+	})
+	ws.configureRead(clientConn)
+
+	if err := serverConn.WriteMessage(websocket.TextMessage, []byte(`{"s":0,"sn":1,"d":{"type":1,"content":"this message exceeds the read limit"}}`)); err != nil {
+		t.Fatalf("write oversized message: %v", err)
+	}
+	if _, _, err := clientConn.ReadMessage(); err == nil {
+		t.Fatal("ReadMessage returned nil error for oversized message")
+	}
+}
+
 func TestWebSocketPongAcknowledgesPendingPing(t *testing.T) {
 	ws := NewWebSocketClient(NewClient("test-token", WithoutRateLimit(), WithoutRetry()), false)
 	ws.trackPendingPing(9)
@@ -519,6 +651,43 @@ func TestSendPipeMessageUsesOfficialQueryAndBody(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("SendPipeMessage returned error: %v", err)
+	}
+	if msg.ID != "msg-1" {
+		t.Fatalf("msg.ID = %q, want msg-1", msg.ID)
+	}
+}
+
+func TestSendPipeTemplateInputUsesRawBody(t *testing.T) {
+	client, closeServer := newTestClient(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v3/message/send-pipemsg" {
+			t.Fatalf("path = %s, want /v3/message/send-pipemsg", r.URL.Path)
+		}
+		query := r.URL.Query()
+		if query.Get("access_token") != "pipe-token" || query.Get("target_id") != "channel-1" || query.Get("type") != "9" {
+			t.Fatalf("query = %s", r.URL.RawQuery)
+		}
+		body := readBodyMap(t, r)
+		want := map[string]interface{}{"name": "tester", "count": float64(2)}
+		if !reflect.DeepEqual(body, want) {
+			t.Fatalf("body = %#v, want %#v", body, want)
+		}
+		if _, exists := body["content"]; exists {
+			t.Fatalf("template body should not contain content wrapper: %#v", body)
+		}
+		writeKOOKResponse(t, w, map[string]interface{}{"msg_id": "msg-1"})
+	})
+	defer closeServer()
+
+	msg, err := client.Message.SendPipe(context.Background(), SendPipeMessageParams{
+		TargetID:    "channel-1",
+		AccessToken: "pipe-token",
+		TemplateInput: map[string]interface{}{
+			"name":  "tester",
+			"count": 2,
+		},
+	})
+	if err != nil {
+		t.Fatalf("SendPipe returned error: %v", err)
 	}
 	if msg.ID != "msg-1" {
 		t.Fatalf("msg.ID = %q, want msg-1", msg.ID)

@@ -5,6 +5,7 @@ import (
 	"compress/zlib"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,6 +19,36 @@ import (
 
 // EventHandler 事件处理器函数类型
 type EventHandler func(*Event)
+
+// WebSocketOptions WebSocket客户端配置。
+type WebSocketOptions struct {
+	ReadLimit      int64
+	ReadTimeout    time.Duration
+	HelloTimeout   time.Duration
+	PongTimeout    time.Duration
+	MaxEventBuffer int
+	EventBufferTTL time.Duration
+}
+
+// DefaultWebSocketOptions 返回默认WebSocket配置。
+func DefaultWebSocketOptions() WebSocketOptions {
+	return WebSocketOptions{
+		ReadLimit:      8 << 20,
+		ReadTimeout:    90 * time.Second,
+		HelloTimeout:   6 * time.Second,
+		PongTimeout:    6 * time.Second,
+		MaxEventBuffer: 1024,
+		EventBufferTTL: 30 * time.Second,
+	}
+}
+
+// ErrEventBufferFull 表示WebSocket乱序事件缓冲区已满。
+var ErrEventBufferFull = errors.New("WebSocket事件缓冲区已满")
+
+type bufferedEvent struct {
+	msg     *WebSocketMessage
+	created time.Time
+}
 
 // WebSocketClient WebSocket客户端
 type WebSocketClient struct {
@@ -39,10 +70,10 @@ type WebSocketClient struct {
 	isConnected     bool
 	connMu          sync.RWMutex
 	writeMu         sync.Mutex
-	pongTimeout     time.Duration
+	options         WebSocketOptions
 	pendingPingSN   int
 	pendingPingMu   sync.Mutex
-	eventBuffer     map[int]*WebSocketMessage
+	eventBuffer     map[int]bufferedEvent
 }
 
 // WebSocketMessage WebSocket消息结构
@@ -86,8 +117,12 @@ const (
 )
 
 // NewWebSocketClient 创建新的WebSocket客户端
-func NewWebSocketClient(client *Client, compress bool) *WebSocketClient {
+func NewWebSocketClient(client *Client, compress bool, options ...WebSocketOptions) *WebSocketClient {
 	ctx, cancel := context.WithCancel(context.Background())
+	wsOptions := DefaultWebSocketOptions()
+	if len(options) > 0 {
+		wsOptions = mergeWebSocketOptions(wsOptions, options[0])
+	}
 
 	return &WebSocketClient{
 		client:         client,
@@ -97,9 +132,31 @@ func NewWebSocketClient(client *Client, compress bool) *WebSocketClient {
 		compress:       compress,
 		maxReconnects:  10,
 		reconnectDelay: 5 * time.Second,
-		pongTimeout:    6 * time.Second,
-		eventBuffer:    make(map[int]*WebSocketMessage),
+		options:        wsOptions,
+		eventBuffer:    make(map[int]bufferedEvent),
 	}
+}
+
+func mergeWebSocketOptions(defaults, override WebSocketOptions) WebSocketOptions {
+	if override.ReadLimit != 0 {
+		defaults.ReadLimit = override.ReadLimit
+	}
+	if override.ReadTimeout != 0 {
+		defaults.ReadTimeout = override.ReadTimeout
+	}
+	if override.HelloTimeout != 0 {
+		defaults.HelloTimeout = override.HelloTimeout
+	}
+	if override.PongTimeout != 0 {
+		defaults.PongTimeout = override.PongTimeout
+	}
+	if override.MaxEventBuffer != 0 {
+		defaults.MaxEventBuffer = override.MaxEventBuffer
+	}
+	if override.EventBufferTTL != 0 {
+		defaults.EventBufferTTL = override.EventBufferTTL
+	}
+	return defaults
 }
 
 // OnEvent 注册事件处理器
@@ -162,10 +219,18 @@ func (ws *WebSocketClient) doConnect() error {
 
 	ws.client.logger.Infof("连接到WebSocket网关: %s", connectURL)
 
-	conn, _, err := websocket.DefaultDialer.Dial(connectURL, header)
+	dialCtx := ws.ctx
+	var cancel context.CancelFunc
+	if ws.options.HelloTimeout > 0 {
+		dialCtx, cancel = context.WithTimeout(ws.ctx, ws.options.HelloTimeout)
+		defer cancel()
+	}
+
+	conn, _, err := websocket.DefaultDialer.DialContext(dialCtx, connectURL, header)
 	if err != nil {
 		return fmt.Errorf("WebSocket连接失败: %w", err)
 	}
+	ws.configureRead(conn)
 
 	ws.connMu.Lock()
 	ws.conn = conn
@@ -178,6 +243,23 @@ func (ws *WebSocketClient) doConnect() error {
 	go ws.handleMessages()
 
 	return nil
+}
+
+func (ws *WebSocketClient) configureRead(conn *websocket.Conn) {
+	if conn == nil {
+		return
+	}
+	if ws.options.ReadLimit > 0 {
+		conn.SetReadLimit(ws.options.ReadLimit)
+	}
+	ws.refreshReadDeadline(conn)
+}
+
+func (ws *WebSocketClient) refreshReadDeadline(conn *websocket.Conn) {
+	if conn == nil || ws.options.ReadTimeout <= 0 {
+		return
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(ws.options.ReadTimeout))
 }
 
 func (ws *WebSocketClient) resumeGatewayURL() string {
@@ -258,6 +340,7 @@ func (ws *WebSocketClient) handleMessages() {
 				ws.client.logger.WithError(err).Error("读取WebSocket消息失败")
 				return
 			}
+			ws.refreshReadDeadline(conn)
 
 			// 如果启用了压缩，需要解压
 			if ws.compress {
@@ -368,11 +451,17 @@ func (ws *WebSocketClient) handleEvent(msg *WebSocketMessage) error {
 		return ws.handleOrderedEvent(msg)
 	}
 
-	return ws.dispatchEvent(msg)
+	event, err := ws.decodeEvent(msg)
+	if err != nil {
+		return err
+	}
+	ws.dispatchDecodedEvent(event)
+	return nil
 }
 
 func (ws *WebSocketClient) handleOrderedEvent(msg *WebSocketMessage) error {
 	ws.stateMu.Lock()
+	ws.expireEventBufferLocked(time.Now())
 	currentSN := ws.sn
 	if msg.SN <= currentSN {
 		ws.stateMu.Unlock()
@@ -380,48 +469,86 @@ func (ws *WebSocketClient) handleOrderedEvent(msg *WebSocketMessage) error {
 		return nil
 	}
 	if msg.SN > currentSN+1 {
-		ws.eventBuffer[msg.SN] = msg
+		if _, exists := ws.eventBuffer[msg.SN]; exists {
+			ws.stateMu.Unlock()
+			ws.client.logger.Debugf("忽略重复缓冲事件SN: %d", msg.SN)
+			return nil
+		}
+		if ws.options.MaxEventBuffer > 0 && len(ws.eventBuffer) >= ws.options.MaxEventBuffer {
+			ws.stateMu.Unlock()
+			return ErrEventBufferFull
+		}
+		ws.eventBuffer[msg.SN] = bufferedEvent{msg: msg, created: time.Now()}
 		ws.stateMu.Unlock()
 		ws.client.logger.Warnf("收到乱序事件SN: %d，当前SN: %d，已缓冲", msg.SN, currentSN)
 		return nil
 	}
 	ws.stateMu.Unlock()
 
-	if err := ws.dispatchEvent(msg); err != nil {
+	if err := ws.dispatchOrderedEvent(msg); err != nil {
 		return err
 	}
 
 	for {
 		ws.stateMu.Lock()
+		ws.expireEventBufferLocked(time.Now())
 		nextSN := ws.sn + 1
-		next := ws.eventBuffer[nextSN]
-		if next == nil {
+		next, ok := ws.eventBuffer[nextSN]
+		if !ok {
 			ws.stateMu.Unlock()
 			return nil
 		}
 		delete(ws.eventBuffer, nextSN)
 		ws.stateMu.Unlock()
 
-		if err := ws.dispatchEvent(next); err != nil {
+		if err := ws.dispatchOrderedEvent(next.msg); err != nil {
 			return err
 		}
 	}
 }
 
-func (ws *WebSocketClient) dispatchEvent(msg *WebSocketMessage) error {
-	var event Event
-	if err := json.Unmarshal(msg.D, &event); err != nil {
-		return fmt.Errorf("解析事件失败: %w", err)
+func (ws *WebSocketClient) expireEventBufferLocked(now time.Time) {
+	if ws.options.EventBufferTTL <= 0 || len(ws.eventBuffer) == 0 {
+		return
+	}
+	for sn, event := range ws.eventBuffer {
+		if now.Sub(event.created) > ws.options.EventBufferTTL {
+			delete(ws.eventBuffer, sn)
+			if sn > ws.sn {
+				ws.sn = sn
+			}
+			ws.client.logger.Warnf("丢弃过期缓冲事件SN: %d", sn)
+		}
+	}
+}
+
+func (ws *WebSocketClient) dispatchOrderedEvent(msg *WebSocketMessage) error {
+	event, err := ws.decodeEvent(msg)
+	if err != nil {
+		return err
 	}
 
 	if msg.SN > 0 {
 		ws.setSN(msg.SN)
 	}
+	ws.dispatchDecodedEvent(event)
+	return nil
+}
+
+func (ws *WebSocketClient) decodeEvent(msg *WebSocketMessage) (*Event, error) {
+	var event Event
+	if err := json.Unmarshal(msg.D, &event); err != nil {
+		return nil, fmt.Errorf("解析事件失败: %w", err)
+	}
+	return &event, nil
+}
+
+func (ws *WebSocketClient) dispatchDecodedEvent(event *Event) {
 	ws.client.logger.Debugf("收到事件: 类型=%d, 内容=%s", event.Type, event.Content)
 
 	// 调用事件处理器
 	ws.mu.RLock()
-	handlers := ws.eventHandlers[event.Type]
+	handlers := append([]EventHandler(nil), ws.eventHandlers[event.Type]...)
 	ws.mu.RUnlock()
 
 	for _, handler := range handlers {
@@ -431,11 +558,9 @@ func (ws *WebSocketClient) dispatchEvent(msg *WebSocketMessage) error {
 					ws.client.logger.Errorf("事件处理器发生panic: %v", r)
 				}
 			}()
-			h(&event)
+			h(event)
 		}(handler)
 	}
-
-	return nil
 }
 
 // handleHello 处理Hello消息
@@ -556,7 +681,12 @@ func (ws *WebSocketClient) trackPendingPing(sn int) {
 	ws.pendingPingSN = sn
 	ws.pendingPingMu.Unlock()
 
-	time.AfterFunc(ws.pongTimeout, func() {
+	timeout := ws.options.PongTimeout
+	if timeout <= 0 {
+		return
+	}
+
+	time.AfterFunc(timeout, func() {
 		ws.pendingPingMu.Lock()
 		pending := ws.pendingPingSN == sn
 		ws.pendingPingMu.Unlock()
@@ -645,7 +775,7 @@ func (ws *WebSocketClient) resetSessionStateForFreshReconnect() {
 	ws.sn = 0
 	ws.sessionID = ""
 	ws.gatewayURL = ""
-	ws.eventBuffer = make(map[int]*WebSocketMessage)
+	ws.eventBuffer = make(map[int]bufferedEvent)
 	ws.stateMu.Unlock()
 	ws.clearPendingPing()
 }
