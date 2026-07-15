@@ -32,7 +32,17 @@ func (s *FriendService) SendFriendRequest(ctx context.Context, params SendFriend
 
 // GetFriendsList 获取好友列表
 func (s *FriendService) GetFriendsList(ctx context.Context) (*FriendsListResponse, error) {
-	resp, err := s.client.Get(ctx, "friend", nil)
+	return s.GetFriendsListByType(ctx, "")
+}
+
+// GetFriendsListByType 获取指定类型的好友列表
+func (s *FriendService) GetFriendsListByType(ctx context.Context, friendType string) (*FriendsListResponse, error) {
+	var query map[string]string
+	if friendType != "" {
+		query = map[string]string{"type": friendType}
+	}
+
+	resp, err := s.client.Get(ctx, "friend", query)
 	if err != nil {
 		return nil, err
 	}

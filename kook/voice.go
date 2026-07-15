@@ -13,15 +13,16 @@ type VoiceService struct {
 
 // JoinVoiceChannel 加入语音频道
 func (s *VoiceService) JoinVoiceChannel(ctx context.Context, channelID string) (*VoiceConnectionInfo, error) {
-	if channelID == "" {
+	return s.JoinVoiceChannelWithParams(ctx, VoiceJoinParams{ChannelID: channelID})
+}
+
+// JoinVoiceChannelWithParams 加入语音频道
+func (s *VoiceService) JoinVoiceChannelWithParams(ctx context.Context, params VoiceJoinParams) (*VoiceConnectionInfo, error) {
+	if params.ChannelID == "" {
 		return nil, fmt.Errorf("频道ID不能为空")
 	}
 
-	params := map[string]interface{}{
-		"channel_id": channelID,
-	}
-
-	resp, err := s.client.Post(ctx, "voice/join", params)
+	resp, err := s.client.Post(ctx, "voice/join", params.toMap())
 	if err != nil {
 		return nil, err
 	}
@@ -102,6 +103,34 @@ func (s *VoiceService) KeepAliveVoiceChannel(ctx context.Context, channelID stri
 }
 
 // 数据结构定义
+
+// VoiceJoinParams 加入语音频道参数
+type VoiceJoinParams struct {
+	ChannelID string `json:"channel_id"`
+	AudioSSRC string `json:"audio_ssrc,omitempty"`
+	AudioPT   string `json:"audio_pt,omitempty"`
+	RTCPMux   *bool  `json:"rtcp_mux,omitempty"`
+	Password  string `json:"password,omitempty"`
+}
+
+func (p VoiceJoinParams) toMap() map[string]interface{} {
+	params := map[string]interface{}{
+		"channel_id": p.ChannelID,
+	}
+	if p.AudioSSRC != "" {
+		params["audio_ssrc"] = p.AudioSSRC
+	}
+	if p.AudioPT != "" {
+		params["audio_pt"] = p.AudioPT
+	}
+	if p.RTCPMux != nil {
+		params["rtcp_mux"] = *p.RTCPMux
+	}
+	if p.Password != "" {
+		params["password"] = p.Password
+	}
+	return params
+}
 
 // VoiceConnectionInfo 语音连接信息
 type VoiceConnectionInfo struct {

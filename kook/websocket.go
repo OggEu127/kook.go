@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -230,7 +231,10 @@ func (ws *WebSocketClient) doConnect() error {
 	if err != nil {
 		return fmt.Errorf("WebSocket连接失败: %w", err)
 	}
-	ws.configureRead(conn)
+	if err := ws.waitHello(conn); err != nil {
+		_ = conn.Close()
+		return err
+	}
 
 	ws.connMu.Lock()
 	ws.conn = conn
@@ -242,6 +246,35 @@ func (ws *WebSocketClient) doConnect() error {
 	// 启动消息处理协程
 	go ws.handleMessages()
 
+	return nil
+}
+
+func (ws *WebSocketClient) waitHello(conn *websocket.Conn) error {
+	if conn == nil {
+		return fmt.Errorf("WebSocket连接不可用")
+	}
+	if ws.options.ReadLimit > 0 {
+		conn.SetReadLimit(ws.options.ReadLimit)
+	}
+	if ws.options.HelloTimeout > 0 {
+		_ = conn.SetReadDeadline(time.Now().Add(ws.options.HelloTimeout))
+	}
+
+	msg, err := ws.readWebSocketMessage(conn)
+	if err != nil {
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			return fmt.Errorf("等待Hello消息超时: %w", err)
+		}
+		return fmt.Errorf("读取Hello消息失败: %w", err)
+	}
+	if msg.S != SignalHello {
+		return fmt.Errorf("首个WebSocket消息信令=%d，期望Hello信令", msg.S)
+	}
+	if err := ws.handleHello(msg); err != nil {
+		return err
+	}
+	ws.refreshReadDeadline(conn)
 	return nil
 }
 
@@ -335,35 +368,40 @@ func (ws *WebSocketClient) handleMessages() {
 				return
 			}
 
-			_, data, err := conn.ReadMessage()
+			msg, err := ws.readWebSocketMessage(conn)
 			if err != nil {
 				ws.client.logger.WithError(err).Error("读取WebSocket消息失败")
 				return
 			}
 			ws.refreshReadDeadline(conn)
 
-			// 如果启用了压缩，需要解压
-			if ws.compress {
-				data, err = ws.decompress(data)
-				if err != nil {
-					ws.client.logger.WithError(err).Error("解压消息失败")
-					continue
-				}
-			}
-
-			ws.client.logger.Debugf("收到WebSocket消息: %s", string(data))
-
-			var msg WebSocketMessage
-			if err := json.Unmarshal(data, &msg); err != nil {
-				ws.client.logger.WithError(err).Error("解析WebSocket消息失败")
-				continue
-			}
-
-			if err := ws.handleMessage(&msg); err != nil {
+			if err := ws.handleMessage(msg); err != nil {
 				ws.client.logger.WithError(err).Error("处理WebSocket消息失败")
 			}
 		}
 	}
+}
+
+func (ws *WebSocketClient) readWebSocketMessage(conn *websocket.Conn) (*WebSocketMessage, error) {
+	_, data, err := conn.ReadMessage()
+	if err != nil {
+		return nil, err
+	}
+
+	if ws.compress {
+		data, err = ws.decompress(data)
+		if err != nil {
+			return nil, fmt.Errorf("解压消息失败: %w", err)
+		}
+	}
+
+	ws.client.logger.Debugf("收到WebSocket消息: %s", string(data))
+
+	var msg WebSocketMessage
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return nil, fmt.Errorf("解析WebSocket消息失败: %w", err)
+	}
+	return &msg, nil
 }
 
 // attemptReconnect 尝试重连

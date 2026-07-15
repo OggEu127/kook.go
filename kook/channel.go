@@ -14,25 +14,20 @@ type ChannelService struct {
 
 // GetChannelList 获取频道列表
 func (s *ChannelService) GetChannelList(ctx context.Context, guildID string, page, pageSize int, sort string) (*ListChannelsResponse, error) {
-	if guildID == "" {
+	return s.GetChannelListWithParams(ctx, ChannelListParams{
+		GuildID:  guildID,
+		Page:     page,
+		PageSize: pageSize,
+	})
+}
+
+// GetChannelListWithParams 获取频道列表
+func (s *ChannelService) GetChannelListWithParams(ctx context.Context, params ChannelListParams) (*ListChannelsResponse, error) {
+	if params.GuildID == "" {
 		return nil, fmt.Errorf("服务器ID不能为空")
 	}
 
-	query := map[string]string{
-		"guild_id": guildID,
-	}
-
-	if page > 0 {
-		query["page"] = strconv.Itoa(page)
-	}
-	if pageSize > 0 && pageSize <= 50 {
-		query["page_size"] = strconv.Itoa(pageSize)
-	}
-	if sort != "" {
-		query["sort"] = sort
-	}
-
-	resp, err := s.client.Get(ctx, "channel/list", query)
+	resp, err := s.client.Get(ctx, "channel/list", params.toQuery())
 	if err != nil {
 		return nil, err
 	}
@@ -426,6 +421,34 @@ type CreateChannelParams struct {
 	LimitAmount  int    `json:"limit_amount,omitempty"`  // 语音频道人数限制
 	VoiceQuality string `json:"voice_quality,omitempty"` // 语音质量
 	IsCategory   bool   `json:"is_category,omitempty"`   // 是否为分组
+}
+
+// ChannelListParams 频道列表参数
+type ChannelListParams struct {
+	GuildID  string `json:"guild_id,omitempty"`
+	Page     int    `json:"page,omitempty"`
+	PageSize int    `json:"page_size,omitempty"`
+	Type     int    `json:"type,omitempty"`
+	ParentID string `json:"parent_id,omitempty"`
+}
+
+func (p ChannelListParams) toQuery() map[string]string {
+	query := map[string]string{
+		"guild_id": p.GuildID,
+	}
+	if p.Page > 0 {
+		query["page"] = strconv.Itoa(p.Page)
+	}
+	if p.PageSize > 0 && p.PageSize <= 50 {
+		query["page_size"] = strconv.Itoa(p.PageSize)
+	}
+	if p.Type > 0 {
+		query["type"] = strconv.Itoa(p.Type)
+	}
+	if p.ParentID != "" {
+		query["parent_id"] = p.ParentID
+	}
+	return query
 }
 
 // UpdateChannelParams 更新频道参数

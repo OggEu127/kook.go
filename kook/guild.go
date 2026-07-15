@@ -78,25 +78,20 @@ func (s *GuildService) LeaveGuild(ctx context.Context, guildID string) error {
 
 // GetGuildMembers 获取服务器成员列表
 func (s *GuildService) GetGuildMembers(ctx context.Context, guildID string, page, pageSize int, sort string) (*ListGuildMembersResponse, error) {
-	if guildID == "" {
+	return s.GetGuildMembersWithParams(ctx, GuildMembersParams{
+		GuildID:  guildID,
+		Page:     page,
+		PageSize: pageSize,
+	})
+}
+
+// GetGuildMembersWithParams 获取服务器成员列表
+func (s *GuildService) GetGuildMembersWithParams(ctx context.Context, params GuildMembersParams) (*ListGuildMembersResponse, error) {
+	if params.GuildID == "" {
 		return nil, fmt.Errorf("服务器ID不能为空")
 	}
 
-	query := map[string]string{
-		"guild_id": guildID,
-	}
-
-	if page > 0 {
-		query["page"] = strconv.Itoa(page)
-	}
-	if pageSize > 0 && pageSize <= 50 {
-		query["page_size"] = strconv.Itoa(pageSize)
-	}
-	if sort != "" {
-		query["sort"] = sort
-	}
-
-	resp, err := s.client.Get(ctx, "guild/user-list", query)
+	resp, err := s.client.Get(ctx, "guild/user-list", params.toQuery())
 	if err != nil {
 		return nil, err
 	}
@@ -320,6 +315,54 @@ type ListGuildsResponse struct {
 	Items []Guild        `json:"items"`
 	Meta  PaginationMeta `json:"meta"`
 	Sort  map[string]int `json:"sort"`
+}
+
+// GuildMembersParams 服务器成员列表参数
+type GuildMembersParams struct {
+	GuildID        string `json:"guild_id,omitempty"`
+	ChannelID      string `json:"channel_id,omitempty"`
+	Search         string `json:"search,omitempty"`
+	RoleID         int    `json:"role_id,omitempty"`
+	MobileVerified *int   `json:"mobile_verified,omitempty"`
+	ActiveTime     *int   `json:"active_time,omitempty"`
+	JoinedAt       *int   `json:"joined_at,omitempty"`
+	Page           int    `json:"page,omitempty"`
+	PageSize       int    `json:"page_size,omitempty"`
+	FilterUserID   string `json:"filter_user_id,omitempty"`
+}
+
+func (p GuildMembersParams) toQuery() map[string]string {
+	query := map[string]string{
+		"guild_id": p.GuildID,
+	}
+	if p.ChannelID != "" {
+		query["channel_id"] = p.ChannelID
+	}
+	if p.Search != "" {
+		query["search"] = p.Search
+	}
+	if p.RoleID > 0 {
+		query["role_id"] = strconv.Itoa(p.RoleID)
+	}
+	if p.MobileVerified != nil {
+		query["mobile_verified"] = strconv.Itoa(*p.MobileVerified)
+	}
+	if p.ActiveTime != nil {
+		query["active_time"] = strconv.Itoa(*p.ActiveTime)
+	}
+	if p.JoinedAt != nil {
+		query["joined_at"] = strconv.Itoa(*p.JoinedAt)
+	}
+	if p.Page > 0 {
+		query["page"] = strconv.Itoa(p.Page)
+	}
+	if p.PageSize > 0 && p.PageSize <= 50 {
+		query["page_size"] = strconv.Itoa(p.PageSize)
+	}
+	if p.FilterUserID != "" {
+		query["filter_user_id"] = p.FilterUserID
+	}
+	return query
 }
 
 // ListGuildMembersResponse 服务器成员列表响应

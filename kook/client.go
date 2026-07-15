@@ -49,6 +49,7 @@ type Client struct {
 	Guild     *GuildService
 	Channel   *ChannelService
 	Message   *MessageService
+	Template  *TemplateService
 	Gateway   *GatewayService
 	Role      *RoleService
 	Game      *GameService
@@ -180,6 +181,7 @@ func NewClientWithError(token string, options ...ClientOption) (*Client, error) 
 	client.Guild = &GuildService{client: client}
 	client.Channel = &ChannelService{client: client}
 	client.Message = &MessageService{client: client}
+	client.Template = &TemplateService{client: client}
 	client.Gateway = &GatewayService{client: client}
 	client.Role = &RoleService{client: client}
 	client.Game = &GameService{client: client}
