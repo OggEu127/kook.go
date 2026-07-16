@@ -2,6 +2,10 @@
 
 一个面向 KOOK API v3 的 Go SDK，封装 HTTP API、WebSocket 事件连接和 Webhook 处理。
 
+# SDK使用指南
+
+[查看文档](https://oggeu.com/posts/Docs/kook-go-sdk-usage-guide)
+
 ## 安装
 
 ```bash
