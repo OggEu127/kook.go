@@ -13,20 +13,20 @@ type RoleService struct {
 }
 
 // GetRoleList 获取服务器角色列表
-func (s *RoleService) GetRoleList(ctx context.Context, guildID string, page, pageSize int) (*ListRolesResponse, error) {
-	if guildID == "" {
+func (s *RoleService) GetRoleList(ctx context.Context, params RoleListParams) (*ListRolesResponse, error) {
+	if params.GuildID == "" {
 		return nil, fmt.Errorf("服务器ID不能为空")
 	}
 
 	query := map[string]string{
-		"guild_id": guildID,
+		"guild_id": params.GuildID,
 	}
 
-	if page > 0 {
-		query["page"] = strconv.Itoa(page)
+	if params.Page != nil {
+		query["page"] = strconv.Itoa(*params.Page)
 	}
-	if pageSize > 0 && pageSize <= 50 {
-		query["page_size"] = strconv.Itoa(pageSize)
+	if params.PageSize != nil {
+		query["page_size"] = strconv.Itoa(*params.PageSize)
 	}
 
 	resp, err := s.client.Get(ctx, "guild-role/list", query)
@@ -43,64 +43,55 @@ func (s *RoleService) GetRoleList(ctx context.Context, guildID string, page, pag
 }
 
 // CreateRole 创建服务器角色
-func (s *RoleService) CreateRole(ctx context.Context, guildID string, name string) (*GuildRole, error) {
-	if guildID == "" {
+func (s *RoleService) CreateRole(ctx context.Context, params CreateRoleParams) (*GuildRole, error) {
+	if params.GuildID == "" {
 		return nil, fmt.Errorf("服务器ID不能为空")
 	}
 
-	params := map[string]interface{}{
-		"guild_id": guildID,
+	body := map[string]interface{}{
+		"guild_id": params.GuildID,
 	}
 
-	if name != "" {
-		params["name"] = name
+	if params.Name != nil {
+		body["name"] = *params.Name
 	}
 
-	resp, err := s.client.Post(ctx, "guild-role/create", params)
+	resp, err := s.client.Post(ctx, "guild-role/create", body)
 	if err != nil {
 		return nil, err
 	}
 
-	var roles []GuildRole
-	if err := json.Unmarshal(resp.Data, &roles); err != nil {
-		return nil, fmt.Errorf("解析角色信息失败: %w", err)
-	}
-
-	if len(roles) == 0 {
-		return nil, fmt.Errorf("未返回角色信息")
-	}
-
-	return &roles[0], nil
+	return decodeRoleResult(resp.Data)
 }
 
 // UpdateRole 更新服务器角色
-func (s *RoleService) UpdateRole(ctx context.Context, guildID string, roleID int, params UpdateRoleParams) (*GuildRole, error) {
-	if guildID == "" {
+func (s *RoleService) UpdateRole(ctx context.Context, params UpdateRoleParams) (*GuildRole, error) {
+	if params.GuildID == "" {
 		return nil, fmt.Errorf("服务器ID不能为空")
 	}
-	if roleID <= 0 {
+	if params.RoleID <= 0 {
 		return nil, fmt.Errorf("角色ID不能为空")
 	}
 
 	requestParams := map[string]interface{}{
-		"guild_id": guildID,
-		"role_id":  roleID,
+		"guild_id": params.GuildID,
+		"role_id":  params.RoleID,
 	}
 
-	if params.Name != "" {
-		requestParams["name"] = params.Name
+	if params.Name != nil {
+		requestParams["name"] = *params.Name
 	}
-	if params.Color >= 0 {
-		requestParams["color"] = params.Color
+	if params.Color != nil {
+		requestParams["color"] = *params.Color
 	}
-	if params.Hoist >= 0 {
-		requestParams["hoist"] = params.Hoist
+	if params.Hoist != nil {
+		requestParams["hoist"] = *params.Hoist
 	}
-	if params.Mentionable >= 0 {
-		requestParams["mentionable"] = params.Mentionable
+	if params.Mentionable != nil {
+		requestParams["mentionable"] = *params.Mentionable
 	}
-	if params.Permissions >= 0 {
-		requestParams["permissions"] = params.Permissions
+	if params.Permissions != nil {
+		requestParams["permissions"] = *params.Permissions
 	}
 
 	resp, err := s.client.Post(ctx, "guild-role/update", requestParams)
@@ -108,55 +99,46 @@ func (s *RoleService) UpdateRole(ctx context.Context, guildID string, roleID int
 		return nil, err
 	}
 
-	var roles []GuildRole
-	if err := json.Unmarshal(resp.Data, &roles); err != nil {
-		return nil, fmt.Errorf("解析角色信息失败: %w", err)
-	}
-
-	if len(roles) == 0 {
-		return nil, fmt.Errorf("未返回角色信息")
-	}
-
-	return &roles[0], nil
+	return decodeRoleResult(resp.Data)
 }
 
 // DeleteRole 删除服务器角色
-func (s *RoleService) DeleteRole(ctx context.Context, guildID string, roleID int) error {
-	if guildID == "" {
+func (s *RoleService) DeleteRole(ctx context.Context, params DeleteRoleParams) error {
+	if params.GuildID == "" {
 		return fmt.Errorf("服务器ID不能为空")
 	}
-	if roleID <= 0 {
+	if params.RoleID <= 0 {
 		return fmt.Errorf("角色ID不能为空")
 	}
 
-	params := map[string]interface{}{
-		"guild_id": guildID,
-		"role_id":  roleID,
+	body := map[string]interface{}{
+		"guild_id": params.GuildID,
+		"role_id":  params.RoleID,
 	}
 
-	_, err := s.client.Post(ctx, "guild-role/delete", params)
+	_, err := s.client.Post(ctx, "guild-role/delete", body)
 	return err
 }
 
 // GrantRole 赋予用户角色
-func (s *RoleService) GrantRole(ctx context.Context, guildID, userID string, roleID int) (*UserRoleResponse, error) {
-	if guildID == "" {
+func (s *RoleService) GrantRole(ctx context.Context, params GrantRoleParams) (*UserRoleResponse, error) {
+	if params.GuildID == "" {
 		return nil, fmt.Errorf("服务器ID不能为空")
 	}
-	if userID == "" {
+	if params.UserID == "" {
 		return nil, fmt.Errorf("用户ID不能为空")
 	}
-	if roleID <= 0 {
+	if params.RoleID <= 0 {
 		return nil, fmt.Errorf("角色ID不能为空")
 	}
 
-	params := map[string]interface{}{
-		"guild_id": guildID,
-		"user_id":  userID,
-		"role_id":  roleID,
+	body := map[string]interface{}{
+		"guild_id": params.GuildID,
+		"user_id":  params.UserID,
+		"role_id":  params.RoleID,
 	}
 
-	resp, err := s.client.Post(ctx, "guild-role/grant", params)
+	resp, err := s.client.Post(ctx, "guild-role/grant", body)
 	if err != nil {
 		return nil, err
 	}
@@ -170,24 +152,24 @@ func (s *RoleService) GrantRole(ctx context.Context, guildID, userID string, rol
 }
 
 // RevokeRole 删除用户角色
-func (s *RoleService) RevokeRole(ctx context.Context, guildID, userID string, roleID int) (*UserRoleResponse, error) {
-	if guildID == "" {
+func (s *RoleService) RevokeRole(ctx context.Context, params RevokeRoleParams) (*UserRoleResponse, error) {
+	if params.GuildID == "" {
 		return nil, fmt.Errorf("服务器ID不能为空")
 	}
-	if userID == "" {
+	if params.UserID == "" {
 		return nil, fmt.Errorf("用户ID不能为空")
 	}
-	if roleID <= 0 {
+	if params.RoleID <= 0 {
 		return nil, fmt.Errorf("角色ID不能为空")
 	}
 
-	params := map[string]interface{}{
-		"guild_id": guildID,
-		"user_id":  userID,
-		"role_id":  roleID,
+	body := map[string]interface{}{
+		"guild_id": params.GuildID,
+		"user_id":  params.UserID,
+		"role_id":  params.RoleID,
 	}
 
-	resp, err := s.client.Post(ctx, "guild-role/revoke", params)
+	resp, err := s.client.Post(ctx, "guild-role/revoke", body)
 	if err != nil {
 		return nil, err
 	}
@@ -215,18 +197,63 @@ type GuildRole struct {
 
 // UpdateRoleParams 更新角色参数
 type UpdateRoleParams struct {
-	Name        string `json:"name,omitempty"`        // 角色名称
-	Color       int    `json:"color,omitempty"`       // 角色色值
-	Hoist       int    `json:"hoist,omitempty"`       // 是否在用户列表排到前面
-	Mentionable int    `json:"mentionable,omitempty"` // 是否可以被提及
-	Permissions int    `json:"permissions,omitempty"` // 权限值
+	GuildID     string
+	RoleID      int
+	Name        *string
+	Color       *int
+	Hoist       *int
+	Mentionable *int
+	Permissions *int
+}
+
+type RoleListParams struct {
+	GuildID  string
+	Page     *int
+	PageSize *int
+}
+
+type CreateRoleParams struct {
+	GuildID string
+	Name    *string
+}
+
+type DeleteRoleParams struct {
+	GuildID string
+	RoleID  int
+}
+
+type GrantRoleParams struct {
+	GuildID string
+	UserID  string
+	RoleID  int
+}
+
+type RevokeRoleParams struct {
+	GuildID string
+	UserID  string
+	RoleID  int
+}
+
+func decodeRoleResult(data json.RawMessage) (*GuildRole, error) {
+	var list []GuildRole
+	if err := json.Unmarshal(data, &list); err == nil {
+		if len(list) == 0 {
+			return nil, fmt.Errorf("未返回角色信息")
+		}
+		return &list[0], nil
+	}
+	var role GuildRole
+	if err := json.Unmarshal(data, &role); err != nil {
+		return nil, fmt.Errorf("解析角色信息失败: %w", err)
+	}
+	return &role, nil
 }
 
 // ListRolesResponse 角色列表响应
 type ListRolesResponse struct {
 	Items []GuildRole    `json:"items"`
 	Meta  PaginationMeta `json:"meta"`
-	Sort  map[string]int `json:"sort"`
+	Sort  SortFields     `json:"sort"`
 }
 
 // UserRoleResponse 用户角色响应

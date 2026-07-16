@@ -18,6 +18,7 @@ func main() {
 
 	// 创建客户端
 	client := kook.NewClient(token)
+	defer client.Close()
 
 	// 获取当前用户信息
 	fmt.Println("=== 获取机器人信息 ===")
@@ -41,7 +42,10 @@ func main() {
 
 	// 获取服务器列表
 	fmt.Println("\n=== 获取服务器列表 ===")
-	guilds, err := client.Guild.GetGuildList(context.Background(), 1, 10, "")
+	page, pageSize := 1, 10
+	guilds, err := client.Guild.GetGuildList(context.Background(), kook.GuildListParams{
+		Page: &page, PageSize: &pageSize,
+	})
 	if err != nil {
 		log.Printf("获取服务器列表失败: %v", err)
 	} else {
@@ -51,7 +55,9 @@ func main() {
 
 			// 演示角色管理API
 			fmt.Printf("\n=== 服务器 %s 的角色管理 ===\n", guild.Name)
-			roles, err := client.Role.GetRoleList(context.Background(), guild.ID, 1, 10)
+			roles, err := client.GuildRole.GetRoleList(context.Background(), kook.RoleListParams{
+				GuildID: guild.ID, Page: &page, PageSize: &pageSize,
+			})
 			if err != nil {
 				log.Printf("获取角色列表失败: %v", err)
 			} else {
@@ -63,7 +69,9 @@ func main() {
 
 			// 演示频道管理API
 			fmt.Printf("\n=== 服务器 %s 的频道列表 ===\n", guild.Name)
-			channels, err := client.Channel.GetChannelList(context.Background(), guild.ID, 1, 10, "")
+			channels, err := client.Channel.GetChannelList(context.Background(), kook.ChannelListParams{
+				GuildID: guild.ID, Page: &page, PageSize: &pageSize,
+			})
 			if err != nil {
 				log.Printf("获取频道列表失败: %v", err)
 			} else {
@@ -75,7 +83,9 @@ func main() {
 
 			// 演示邀请管理API
 			fmt.Printf("\n=== 服务器 %s 的邀请管理 ===\n", guild.Name)
-			invites, err := client.Invite.GetInviteList(context.Background(), guild.ID, 1, 10)
+			invites, err := client.Invite.GetInviteList(context.Background(), kook.InviteListParams{
+				GuildID: guild.ID, Page: &page, PageSize: &pageSize,
+			})
 			if err != nil {
 				log.Printf("获取邀请列表失败: %v", err)
 			} else {
@@ -92,7 +102,7 @@ func main() {
 
 	// 演示游戏API
 	fmt.Println("\n=== 游戏管理 ===")
-	games, err := client.Game.GetGameList(context.Background(), "")
+	games, err := client.Game.GetGameList(context.Background(), kook.GameListParams{})
 	if err != nil {
 		log.Printf("获取游戏列表失败: %v", err)
 	} else {
@@ -106,7 +116,7 @@ func main() {
 
 	// 演示好友API
 	fmt.Println("\n=== 好友管理 ===")
-	friends, err := client.Friend.GetFriendsList(context.Background())
+	friends, err := client.Friend.GetFriendsList(context.Background(), kook.FriendListParams{})
 	if err != nil {
 		log.Printf("获取好友列表失败: %v", err)
 	} else {
@@ -115,16 +125,13 @@ func main() {
 		fmt.Printf("屏蔽用户数量: %d\n", len(friends.Blocked))
 	}
 
-	// 演示消息API
-	fmt.Println("\n=== 消息功能演示 ===")
-
-	// 检查卡片消息格式
-	cardContent := `[{"type":"card","theme":"primary","size":"lg","modules":[{"type":"section","text":{"type":"plain-text","content":"这是一个测试卡片消息"}}]}]`
-	_, err = client.Message.CheckCard(context.Background(), cardContent)
+	// 演示消息模板API
+	fmt.Println("\n=== 消息模板 ===")
+	templates, err := client.Template.GetTemplateList(context.Background())
 	if err != nil {
-		log.Printf("卡片消息格式检查失败: %v", err)
+		log.Printf("获取消息模板列表失败: %v", err)
 	} else {
-		fmt.Println("卡片消息格式正确")
+		fmt.Printf("模板数量: %d\n", len(templates.Items))
 	}
 
 	fmt.Println("\n=== API演示完成 ===")

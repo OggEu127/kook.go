@@ -2,47 +2,41 @@ package kook
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"net/http"
+	"strconv"
 )
 
-// BadgeService 徽章相关API服务
+// BadgeService Badge 图片接口。
 type BadgeService struct {
 	client *Client
 }
 
-// GetGuildBadges 获取服务器徽章列表
-func (s *BadgeService) GetGuildBadges(ctx context.Context, guildID string) ([]Badge, error) {
-	if guildID == "" {
-		return nil, fmt.Errorf("服务器ID不能为空")
-	}
+// BadgeStyle Badge 展示样式。
+type BadgeStyle int
 
-	query := map[string]string{
-		"guild_id": guildID,
-	}
+const (
+	BadgeStyleGuildName BadgeStyle = iota
+	BadgeStyleOnlineCount
+	BadgeStyleOnlineAndTotal
+)
 
-	resp, err := s.client.Get(ctx, "badge/guild", query)
-	if err != nil {
-		return nil, err
-	}
-
-	var badges []Badge
-	if err := json.Unmarshal(resp.Data, &badges); err != nil {
-		return nil, fmt.Errorf("解析徽章列表失败: %w", err)
-	}
-
-	return badges, nil
+// BadgeParams 获取服务器 Badge 的参数。
+type BadgeParams struct {
+	GuildID string
+	Style   BadgeStyle
 }
 
-// 数据结构定义
-
-// Badge 徽章信息
-type Badge struct {
-	ID          string `json:"id"`          // 徽章ID
-	Name        string `json:"name"`        // 徽章名称
-	Description string `json:"description"` // 徽章描述
-	Icon        string `json:"icon"`        // 徽章图标URL
-	Type        int    `json:"type"`        // 徽章类型
-	Level       int    `json:"level"`       // 徽章等级
-	Unlocked    bool   `json:"unlocked"`    // 是否已解锁
+// GetGuildBadge 获取服务器 Badge 图片。
+func (s *BadgeService) GetGuildBadge(ctx context.Context, params BadgeParams) (*BinaryResponse, error) {
+	if params.GuildID == "" {
+		return nil, fmt.Errorf("服务器ID不能为空")
+	}
+	if params.Style < BadgeStyleGuildName || params.Style > BadgeStyleOnlineAndTotal {
+		return nil, fmt.Errorf("Badge样式必须为0、1或2")
+	}
+	return s.client.doBinaryRequest(ctx, http.MethodGet, "badge/guild", map[string]string{
+		"guild_id": params.GuildID,
+		"style":    strconv.Itoa(int(params.Style)),
+	})
 }

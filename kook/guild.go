@@ -13,17 +13,17 @@ type GuildService struct {
 }
 
 // GetGuildList 获取当前用户的服务器列表
-func (s *GuildService) GetGuildList(ctx context.Context, page, pageSize int, sort string) (*ListGuildsResponse, error) {
+func (s *GuildService) GetGuildList(ctx context.Context, params GuildListParams) (*ListGuildsResponse, error) {
 	query := make(map[string]string)
 
-	if page > 0 {
-		query["page"] = strconv.Itoa(page)
+	if params.Page != nil {
+		query["page"] = strconv.Itoa(*params.Page)
 	}
-	if pageSize > 0 && pageSize <= 50 {
-		query["page_size"] = strconv.Itoa(pageSize)
+	if params.PageSize != nil {
+		query["page_size"] = strconv.Itoa(*params.PageSize)
 	}
-	if sort != "" {
-		query["sort"] = sort
+	if params.Sort != "" {
+		query["sort"] = params.Sort
 	}
 
 	resp, err := s.client.Get(ctx, "guild/list", query)
@@ -40,13 +40,13 @@ func (s *GuildService) GetGuildList(ctx context.Context, page, pageSize int, sor
 }
 
 // GetGuildInfo 获取服务器信息
-func (s *GuildService) GetGuildInfo(ctx context.Context, guildID string) (*Guild, error) {
-	if guildID == "" {
+func (s *GuildService) GetGuildInfo(ctx context.Context, params GuildViewParams) (*Guild, error) {
+	if params.GuildID == "" {
 		return nil, fmt.Errorf("服务器ID不能为空")
 	}
 
 	query := map[string]string{
-		"guild_id": guildID,
+		"guild_id": params.GuildID,
 	}
 
 	resp, err := s.client.Get(ctx, "guild/view", query)
@@ -63,30 +63,21 @@ func (s *GuildService) GetGuildInfo(ctx context.Context, guildID string) (*Guild
 }
 
 // LeaveGuild 离开服务器
-func (s *GuildService) LeaveGuild(ctx context.Context, guildID string) error {
-	if guildID == "" {
+func (s *GuildService) LeaveGuild(ctx context.Context, params GuildLeaveParams) error {
+	if params.GuildID == "" {
 		return fmt.Errorf("服务器ID不能为空")
 	}
 
-	params := map[string]interface{}{
-		"guild_id": guildID,
+	body := map[string]interface{}{
+		"guild_id": params.GuildID,
 	}
 
-	_, err := s.client.Post(ctx, "guild/leave", params)
+	_, err := s.client.Post(ctx, "guild/leave", body)
 	return err
 }
 
 // GetGuildMembers 获取服务器成员列表
-func (s *GuildService) GetGuildMembers(ctx context.Context, guildID string, page, pageSize int, sort string) (*ListGuildMembersResponse, error) {
-	return s.GetGuildMembersWithParams(ctx, GuildMembersParams{
-		GuildID:  guildID,
-		Page:     page,
-		PageSize: pageSize,
-	})
-}
-
-// GetGuildMembersWithParams 获取服务器成员列表
-func (s *GuildService) GetGuildMembersWithParams(ctx context.Context, params GuildMembersParams) (*ListGuildMembersResponse, error) {
+func (s *GuildService) GetGuildMembers(ctx context.Context, params GuildMembersParams) (*ListGuildMembersResponse, error) {
 	if params.GuildID == "" {
 		return nil, fmt.Errorf("服务器ID不能为空")
 	}
@@ -104,139 +95,53 @@ func (s *GuildService) GetGuildMembersWithParams(ctx context.Context, params Gui
 	return &result, nil
 }
 
-// GetGuildMember 获取服务器成员信息
-func (s *GuildService) GetGuildMember(ctx context.Context, guildID, userID string) (*GuildMember, error) {
-	if guildID == "" {
-		return nil, fmt.Errorf("服务器ID不能为空")
-	}
-	if userID == "" {
-		return nil, fmt.Errorf("用户ID不能为空")
-	}
-
-	query := map[string]string{
-		"guild_id": guildID,
-		"user_id":  userID,
-	}
-
-	resp, err := s.client.Get(ctx, "user/view", query)
-	if err != nil {
-		return nil, err
-	}
-
-	var member GuildMember
-	if err := json.Unmarshal(resp.Data, &member); err != nil {
-		return nil, fmt.Errorf("解析服务器成员信息失败: %w", err)
-	}
-
-	return &member, nil
-}
-
 // KickGuildMember 踢出服务器成员
-func (s *GuildService) KickGuildMember(ctx context.Context, guildID, userID string) error {
-	if guildID == "" {
+func (s *GuildService) KickGuildMember(ctx context.Context, params GuildKickoutParams) error {
+	if params.GuildID == "" {
 		return fmt.Errorf("服务器ID不能为空")
 	}
-	if userID == "" {
+	if params.TargetID == "" {
 		return fmt.Errorf("用户ID不能为空")
 	}
 
-	params := map[string]interface{}{
-		"guild_id":  guildID,
-		"target_id": userID,
+	body := map[string]interface{}{
+		"guild_id":  params.GuildID,
+		"target_id": params.TargetID,
 	}
 
-	_, err := s.client.Post(ctx, "guild/kickout", params)
+	_, err := s.client.Post(ctx, "guild/kickout", body)
 	return err
 }
 
 // UpdateGuildMemberNickname 修改服务器成员昵称
-func (s *GuildService) UpdateGuildMemberNickname(ctx context.Context, guildID, userID, nickname string) error {
-	if guildID == "" {
+func (s *GuildService) UpdateGuildMemberNickname(ctx context.Context, params GuildNicknameParams) error {
+	if params.GuildID == "" {
 		return fmt.Errorf("服务器ID不能为空")
 	}
 
-	params := map[string]interface{}{
-		"guild_id": guildID,
-		"nickname": nickname,
+	requestParams := map[string]interface{}{
+		"guild_id": params.GuildID,
+	}
+	if params.Nickname != nil {
+		requestParams["nickname"] = *params.Nickname
+	}
+	if params.UserID != "" {
+		requestParams["user_id"] = params.UserID
 	}
 
-	if userID != "" {
-		params["user_id"] = userID
-	}
-
-	_, err := s.client.Post(ctx, "guild/nickname", params)
+	_, err := s.client.Post(ctx, "guild/nickname", requestParams)
 	return err
-}
-
-// GetRegions 获取可用的服务器区域列表
-func (s *GuildService) GetRegions(ctx context.Context) (*ListRegionsResponse, error) {
-	resp, err := s.client.Get(ctx, "guild/regions", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result ListRegionsResponse
-	if err := json.Unmarshal(resp.Data, &result); err != nil {
-		return nil, fmt.Errorf("解析区域列表失败: %w", err)
-	}
-
-	return &result, nil
-}
-
-// UpdateNickname 修改用户昵称
-func (s *GuildService) UpdateNickname(ctx context.Context, guildID, userID, nickname string) error {
-	if guildID == "" {
-		return fmt.Errorf("服务器ID不能为空")
-	}
-	if userID == "" {
-		return fmt.Errorf("用户ID不能为空")
-	}
-
-	params := map[string]interface{}{
-		"guild_id": guildID,
-		"user_id":  userID,
-	}
-
-	if nickname != "" {
-		params["nickname"] = nickname
-	}
-
-	_, err := s.client.Post(ctx, "guild/nickname", params)
-	return err
-}
-
-// GetGuildBoostInfo 获取服务器助力信息
-func (s *GuildService) GetGuildBoostInfo(ctx context.Context, guildID string) (*GuildBoostInfo, error) {
-	if guildID == "" {
-		return nil, fmt.Errorf("服务器ID不能为空")
-	}
-
-	query := map[string]string{
-		"guild_id": guildID,
-	}
-
-	resp, err := s.client.Get(ctx, "guild-boost/info", query)
-	if err != nil {
-		return nil, err
-	}
-
-	var boostInfo GuildBoostInfo
-	if err := json.Unmarshal(resp.Data, &boostInfo); err != nil {
-		return nil, fmt.Errorf("解析助力信息失败: %w", err)
-	}
-
-	return &boostInfo, nil
 }
 
 // GetGuildMuteList 获取服务器静音闭麦列表
-func (s *GuildService) GetGuildMuteList(ctx context.Context, guildID string, returnType string) (*GuildMuteList, error) {
-	if guildID == "" {
+func (s *GuildService) GetGuildMuteList(ctx context.Context, params GuildMuteListParams) (*GuildMuteList, error) {
+	if params.GuildID == "" {
 		return nil, fmt.Errorf("服务器ID不能为空")
 	}
 
-	query := map[string]string{"guild_id": guildID}
-	if returnType != "" {
-		query["return_type"] = returnType
+	query := map[string]string{"guild_id": params.GuildID}
+	if params.ReturnType != "" {
+		query["return_type"] = params.ReturnType
 	}
 
 	resp, err := s.client.Get(ctx, "guild-mute/list", query)
@@ -253,13 +158,13 @@ func (s *GuildService) GetGuildMuteList(ctx context.Context, guildID string, ret
 }
 
 // CreateGuildMute 添加服务器静音或闭麦
-func (s *GuildService) CreateGuildMute(ctx context.Context, guildID, userID string, muteType int) error {
-	return s.setGuildMute(ctx, "guild-mute/create", guildID, userID, muteType)
+func (s *GuildService) CreateGuildMute(ctx context.Context, params GuildMuteCreateParams) error {
+	return s.setGuildMute(ctx, "guild-mute/create", params.GuildID, params.UserID, params.Type)
 }
 
 // DeleteGuildMute 删除服务器静音或闭麦
-func (s *GuildService) DeleteGuildMute(ctx context.Context, guildID, userID string, muteType int) error {
-	return s.setGuildMute(ctx, "guild-mute/delete", guildID, userID, muteType)
+func (s *GuildService) DeleteGuildMute(ctx context.Context, params GuildMuteDeleteParams) error {
+	return s.setGuildMute(ctx, "guild-mute/delete", params.GuildID, params.UserID, params.Type)
 }
 
 func (s *GuildService) setGuildMute(ctx context.Context, endpoint, guildID, userID string, muteType int) error {
@@ -282,17 +187,17 @@ func (s *GuildService) setGuildMute(ctx context.Context, endpoint, guildID, user
 }
 
 // GetGuildBoostHistory 查询服务器助力历史
-func (s *GuildService) GetGuildBoostHistory(ctx context.Context, guildID string, startTime, endTime int64) (*GuildBoostHistoryResponse, error) {
-	if guildID == "" {
+func (s *GuildService) GetGuildBoostHistory(ctx context.Context, params GuildBoostHistoryParams) (*GuildBoostHistoryResponse, error) {
+	if params.GuildID == "" {
 		return nil, fmt.Errorf("服务器ID不能为空")
 	}
 
-	query := map[string]string{"guild_id": guildID}
-	if startTime > 0 {
-		query["start_time"] = strconv.FormatInt(startTime, 10)
+	query := map[string]string{"guild_id": params.GuildID}
+	if params.StartTime != nil {
+		query["start_time"] = strconv.FormatInt(*params.StartTime, 10)
 	}
-	if endTime > 0 {
-		query["end_time"] = strconv.FormatInt(endTime, 10)
+	if params.EndTime != nil {
+		query["end_time"] = strconv.FormatInt(*params.EndTime, 10)
 	}
 
 	resp, err := s.client.Get(ctx, "guild-boost/history", query)
@@ -310,11 +215,59 @@ func (s *GuildService) GetGuildBoostHistory(ctx context.Context, guildID string,
 
 // 数据结构定义
 
+type GuildListParams struct {
+	Page     *int
+	PageSize *int
+	Sort     string
+}
+
+type GuildViewParams struct {
+	GuildID string
+}
+
+type GuildLeaveParams struct {
+	GuildID string
+}
+
+type GuildKickoutParams struct {
+	GuildID  string
+	TargetID string
+}
+
+type GuildNicknameParams struct {
+	GuildID  string
+	Nickname *string
+	UserID   string
+}
+
+type GuildMuteListParams struct {
+	GuildID    string
+	ReturnType string
+}
+
+type GuildMuteCreateParams struct {
+	GuildID string
+	UserID  string
+	Type    int
+}
+
+type GuildMuteDeleteParams struct {
+	GuildID string
+	UserID  string
+	Type    int
+}
+
+type GuildBoostHistoryParams struct {
+	GuildID   string
+	StartTime *int64
+	EndTime   *int64
+}
+
 // ListGuildsResponse 服务器列表响应
 type ListGuildsResponse struct {
 	Items []Guild        `json:"items"`
 	Meta  PaginationMeta `json:"meta"`
-	Sort  map[string]int `json:"sort"`
+	Sort  SortFields     `json:"sort"`
 }
 
 // GuildMembersParams 服务器成员列表参数
@@ -322,12 +275,12 @@ type GuildMembersParams struct {
 	GuildID        string `json:"guild_id,omitempty"`
 	ChannelID      string `json:"channel_id,omitempty"`
 	Search         string `json:"search,omitempty"`
-	RoleID         int    `json:"role_id,omitempty"`
+	RoleID         *int   `json:"role_id,omitempty"`
 	MobileVerified *int   `json:"mobile_verified,omitempty"`
 	ActiveTime     *int   `json:"active_time,omitempty"`
 	JoinedAt       *int   `json:"joined_at,omitempty"`
-	Page           int    `json:"page,omitempty"`
-	PageSize       int    `json:"page_size,omitempty"`
+	Page           *int   `json:"page,omitempty"`
+	PageSize       *int   `json:"page_size,omitempty"`
 	FilterUserID   string `json:"filter_user_id,omitempty"`
 }
 
@@ -341,8 +294,8 @@ func (p GuildMembersParams) toQuery() map[string]string {
 	if p.Search != "" {
 		query["search"] = p.Search
 	}
-	if p.RoleID > 0 {
-		query["role_id"] = strconv.Itoa(p.RoleID)
+	if p.RoleID != nil {
+		query["role_id"] = strconv.Itoa(*p.RoleID)
 	}
 	if p.MobileVerified != nil {
 		query["mobile_verified"] = strconv.Itoa(*p.MobileVerified)
@@ -353,11 +306,11 @@ func (p GuildMembersParams) toQuery() map[string]string {
 	if p.JoinedAt != nil {
 		query["joined_at"] = strconv.Itoa(*p.JoinedAt)
 	}
-	if p.Page > 0 {
-		query["page"] = strconv.Itoa(p.Page)
+	if p.Page != nil {
+		query["page"] = strconv.Itoa(*p.Page)
 	}
-	if p.PageSize > 0 && p.PageSize <= 50 {
-		query["page_size"] = strconv.Itoa(p.PageSize)
+	if p.PageSize != nil {
+		query["page_size"] = strconv.Itoa(*p.PageSize)
 	}
 	if p.FilterUserID != "" {
 		query["filter_user_id"] = p.FilterUserID
@@ -367,23 +320,12 @@ func (p GuildMembersParams) toQuery() map[string]string {
 
 // ListGuildMembersResponse 服务器成员列表响应
 type ListGuildMembersResponse struct {
-	Items []GuildMember  `json:"items"`
-	Meta  PaginationMeta `json:"meta"`
-	Sort  map[string]int `json:"sort"`
-}
-
-// ListRegionsResponse 区域列表响应
-type ListRegionsResponse struct {
-	Items []Region       `json:"items"`
-	Meta  PaginationMeta `json:"meta"`
-	Sort  map[string]int `json:"sort"`
-}
-
-// GuildBoostInfo 服务器助力信息
-type GuildBoostInfo struct {
-	BoostNum       int `json:"boost_num"`        // 助力数量
-	BufferBoostNum int `json:"buffer_boost_num"` // 缓冲助力数量
-	Level          int `json:"level"`            // 服务器等级
+	Items        []User         `json:"items"`
+	Meta         PaginationMeta `json:"meta"`
+	Sort         SortFields     `json:"sort"`
+	UserCount    int            `json:"user_count"`
+	OnlineCount  int            `json:"online_count"`
+	OfflineCount int            `json:"offline_count"`
 }
 
 const (
@@ -418,5 +360,5 @@ type GuildBoostHistory struct {
 type GuildBoostHistoryResponse struct {
 	Items []GuildBoostHistory `json:"items"`
 	Meta  PaginationMeta      `json:"meta"`
-	Sort  map[string]int      `json:"sort"`
+	Sort  SortFields          `json:"sort"`
 }

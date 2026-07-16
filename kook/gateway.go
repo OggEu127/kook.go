@@ -11,11 +11,19 @@ type GatewayService struct {
 	client *Client
 }
 
+// GatewayParams 获取网关连接地址参数。
+type GatewayParams struct {
+	Compress *int
+}
+
 // GetGateway 获取网关连接信息
-func (s *GatewayService) GetGateway(ctx context.Context, compress int) (*Gateway, error) {
+func (s *GatewayService) GetGateway(ctx context.Context, params GatewayParams) (*Gateway, error) {
 	query := make(map[string]string)
-	if compress >= 0 {
-		query["compress"] = fmt.Sprintf("%d", compress)
+	if params.Compress != nil {
+		if *params.Compress != 0 && *params.Compress != 1 {
+			return nil, fmt.Errorf("compress必须为0或1")
+		}
+		query["compress"] = fmt.Sprintf("%d", *params.Compress)
 	}
 
 	resp, err := s.client.Get(ctx, "gateway/index", query)
@@ -29,27 +37,4 @@ func (s *GatewayService) GetGateway(ctx context.Context, compress int) (*Gateway
 	}
 
 	return &gateway, nil
-}
-
-// GetVoiceGateway 获取语音网关连接信息
-func (s *GatewayService) GetVoiceGateway(ctx context.Context, channelID string) (*VoiceGateway, error) {
-	if channelID == "" {
-		return nil, fmt.Errorf("频道ID不能为空")
-	}
-
-	query := map[string]string{
-		"channel_id": channelID,
-	}
-
-	resp, err := s.client.Get(ctx, "gateway/voice", query)
-	if err != nil {
-		return nil, err
-	}
-
-	var voiceGateway VoiceGateway
-	if err := json.Unmarshal(resp.Data, &voiceGateway); err != nil {
-		return nil, fmt.Errorf("解析语音网关信息失败: %w", err)
-	}
-
-	return &voiceGateway, nil
 }

@@ -66,9 +66,8 @@ go run main.go
 - `!pin` - 置顶当前消息
 - `!game <游戏名>` - 设置游戏动态
 - `!music <歌手> <歌名>` - 设置音乐动态
-- `!regions` - 查看可用区域
 - `!invites` - 查看服务器邀请
-- `!badges` - 查看服务器徽章
+- `!badges` - 获取服务器 Badge 图片信息
 - `!nickname <昵称>` - 修改你的昵称
 - `!upload` - 上传文件示例
 
@@ -116,7 +115,7 @@ go run main.go
 - 演示Webhook模式的机器人
 - HTTP服务器接收KOOK事件
 - 适合服务器部署使用
-- 相比WebSocket更稳定
+- 使用与WebSocket相同的事件处理API
 
 **主要特性**:
 - 启动HTTP服务器监听Webhook
@@ -149,8 +148,8 @@ go run main.go
 **文件位置**: `examples/complete_api_demo/main.go`
 
 **功能介绍**:
-- 演示SDK支持的所有主要API
-- 完整的功能覆盖测试
+- 演示SDK常用的只读API
+- 用于快速检查Token和常见权限
 - 适合测试SDK完整性
 - 展示API的实际返回数据
 
@@ -162,7 +161,7 @@ go run main.go
 - 邀请管理API
 - 游戏和动态API
 - 好友管理API
-- 消息功能API
+- 消息模板API
 
 **运行方法**:
 ```bash
@@ -172,7 +171,7 @@ go run main.go
 
 **输出内容**:
 - 机器人基本信息
-- 所有服务器的详细信息
+- 服务器和相关资源信息
 - 各种API的调用结果
 - 错误处理演示
 
@@ -251,4 +250,4 @@ A: 确认Webhook URL配置正确，服务器端口已开放
 
 - [KOOK官方文档](https://developer.kookapp.cn/doc/reference)
 - [Go语言官网](https://golang.org/)
-- [项目主页](../README.md) 
+- [项目主页](../README.md)

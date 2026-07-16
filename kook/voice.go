@@ -11,13 +11,8 @@ type VoiceService struct {
 	client *Client
 }
 
-// JoinVoiceChannel 加入语音频道
-func (s *VoiceService) JoinVoiceChannel(ctx context.Context, channelID string) (*VoiceConnectionInfo, error) {
-	return s.JoinVoiceChannelWithParams(ctx, VoiceJoinParams{ChannelID: channelID})
-}
-
-// JoinVoiceChannelWithParams 加入语音频道
-func (s *VoiceService) JoinVoiceChannelWithParams(ctx context.Context, params VoiceJoinParams) (*VoiceConnectionInfo, error) {
+// JoinVoiceChannel 加入语音频道。
+func (s *VoiceService) JoinVoiceChannel(ctx context.Context, params VoiceJoinParams) (*VoiceConnectionInfo, error) {
 	if params.ChannelID == "" {
 		return nil, fmt.Errorf("频道ID不能为空")
 	}
@@ -35,43 +30,22 @@ func (s *VoiceService) JoinVoiceChannelWithParams(ctx context.Context, params Vo
 	return &connInfo, nil
 }
 
-// LeaveVoiceChannel 离开语音频道
-func (s *VoiceService) LeaveVoiceChannel(ctx context.Context, channelID string) error {
-	if channelID == "" {
+type VoiceLeaveParams struct {
+	ChannelID string
+}
+
+// LeaveVoiceChannel 离开语音频道。
+func (s *VoiceService) LeaveVoiceChannel(ctx context.Context, params VoiceLeaveParams) error {
+	if params.ChannelID == "" {
 		return fmt.Errorf("频道ID不能为空")
 	}
 
-	params := map[string]interface{}{
-		"channel_id": channelID,
+	body := map[string]interface{}{
+		"channel_id": params.ChannelID,
 	}
 
-	_, err := s.client.Post(ctx, "voice/leave", params)
+	_, err := s.client.Post(ctx, "voice/leave", body)
 	return err
-}
-
-// GetVoiceChannelUsers 获取语音频道用户列表
-func (s *VoiceService) GetVoiceChannelUsers(ctx context.Context, channelID string) ([]VoiceUser, error) {
-	return nil, fmt.Errorf("KOOK v3 官方接口未提供 voice/users；请改用 GetJoinedVoiceChannels")
-}
-
-// MuteUser 静音用户
-func (s *VoiceService) MuteUser(ctx context.Context, channelID, userID string) error {
-	return fmt.Errorf("KOOK v3 官方接口未提供 voice/mute")
-}
-
-// UnmuteUser 取消静音用户
-func (s *VoiceService) UnmuteUser(ctx context.Context, channelID, userID string) error {
-	return fmt.Errorf("KOOK v3 官方接口未提供 voice/unmute")
-}
-
-// DeafenUser 闭麦用户
-func (s *VoiceService) DeafenUser(ctx context.Context, channelID, userID string) error {
-	return fmt.Errorf("KOOK v3 官方接口未提供 voice/deafen")
-}
-
-// UndeafenUser 取消闭麦用户
-func (s *VoiceService) UndeafenUser(ctx context.Context, channelID, userID string) error {
-	return fmt.Errorf("KOOK v3 官方接口未提供 voice/undeafen")
 }
 
 // GetJoinedVoiceChannels 获取机器人已加入的语音频道列表
@@ -88,17 +62,21 @@ func (s *VoiceService) GetJoinedVoiceChannels(ctx context.Context) (*ListVoiceCh
 	return &result, nil
 }
 
-// KeepAliveVoiceChannel 续期语音频道占用
-func (s *VoiceService) KeepAliveVoiceChannel(ctx context.Context, channelID string) error {
-	if channelID == "" {
+type VoiceKeepAliveParams struct {
+	ChannelID string
+}
+
+// KeepAliveVoiceChannel 续期语音频道占用。
+func (s *VoiceService) KeepAliveVoiceChannel(ctx context.Context, params VoiceKeepAliveParams) error {
+	if params.ChannelID == "" {
 		return fmt.Errorf("频道ID不能为空")
 	}
 
-	params := map[string]interface{}{
-		"channel_id": channelID,
+	body := map[string]interface{}{
+		"channel_id": params.ChannelID,
 	}
 
-	_, err := s.client.Post(ctx, "voice/keep-alive", params)
+	_, err := s.client.Post(ctx, "voice/keep-alive", body)
 	return err
 }
 
@@ -143,6 +121,34 @@ type VoiceConnectionInfo struct {
 	AudioPT   string `json:"audio_pt"`   // 最终的Payload Type
 }
 
+// UnmarshalJSON 兼容 port/rtcp_port 在文档表格和示例中的 int/string 差异。
+func (v *VoiceConnectionInfo) UnmarshalJSON(data []byte) error {
+	type voiceConnectionAlias VoiceConnectionInfo
+	value := struct {
+		*voiceConnectionAlias
+		Port     json.RawMessage `json:"port"`
+		RTCPPort json.RawMessage `json:"rtcp_port"`
+	}{voiceConnectionAlias: (*voiceConnectionAlias)(v)}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	if len(value.Port) > 0 {
+		port, err := decodeStringOrNumber(value.Port)
+		if err != nil {
+			return fmt.Errorf("解析voice.port失败: %w", err)
+		}
+		v.Port = port
+	}
+	if len(value.RTCPPort) > 0 {
+		port, err := decodeStringOrNumber(value.RTCPPort)
+		if err != nil {
+			return fmt.Errorf("解析voice.rtcp_port失败: %w", err)
+		}
+		v.RTCPPort = port
+	}
+	return nil
+}
+
 // VoiceChannel 机器人已加入的语音频道
 type VoiceChannel struct {
 	ID       string `json:"id"`        // 频道ID
@@ -155,15 +161,5 @@ type VoiceChannel struct {
 type ListVoiceChannelsResponse struct {
 	Items []VoiceChannel `json:"items"`
 	Meta  PaginationMeta `json:"meta"`
-	Sort  map[string]int `json:"sort"`
-}
-
-// VoiceUser 语音频道用户
-type VoiceUser struct {
-	User         User `json:"user"`          // 用户信息
-	Muted        bool `json:"muted"`         // 是否被静音
-	Deafened     bool `json:"deafened"`      // 是否被闭麦
-	SelfMuted    bool `json:"self_muted"`    // 是否自我静音
-	SelfDeafened bool `json:"self_deafened"` // 是否自我闭麦
-	Speaking     bool `json:"speaking"`      // 是否正在说话
+	Sort  SortFields     `json:"sort"`
 }

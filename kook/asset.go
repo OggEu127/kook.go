@@ -9,48 +9,57 @@ import (
 	"path/filepath"
 )
 
-// AssetService 媒体资源相关API服务
+// AssetService 媒体资源相关 API 服务。
 type AssetService struct {
 	client *Client
 }
 
-// UploadFile 上传文件
-func (s *AssetService) UploadFile(ctx context.Context, filePath string) (*Asset, error) {
-	if filePath == "" {
+type AssetPathParams struct {
+	Path string
+}
+
+// CreateFromPath 从本地路径上传媒体文件。
+func (s *AssetService) CreateFromPath(ctx context.Context, params AssetPathParams) (*Asset, error) {
+	if params.Path == "" {
 		return nil, fmt.Errorf("文件路径不能为空")
 	}
 
-	// 打开文件
-	file, err := os.Open(filePath)
+	file, err := os.Open(params.Path)
 	if err != nil {
 		return nil, fmt.Errorf("打开文件失败: %w", err)
 	}
 	defer file.Close()
 
-	// 读取文件内容
 	fileContent, err := io.ReadAll(file)
 	if err != nil {
 		return nil, fmt.Errorf("读取文件失败: %w", err)
 	}
 
-	fileName := filepath.Base(filePath)
-	return s.UploadFileContent(ctx, fileName, fileContent)
+	return s.Create(ctx, AssetCreateParams{
+		FileName: filepath.Base(params.Path),
+		Content:  fileContent,
+	})
 }
 
-// UploadFileContent 上传文件内容
-func (s *AssetService) UploadFileContent(ctx context.Context, fileName string, content []byte) (*Asset, error) {
-	if fileName == "" {
+type AssetCreateParams struct {
+	FileName string
+	Content  []byte
+}
+
+// Create 上传内存中的媒体文件。
+func (s *AssetService) Create(ctx context.Context, params AssetCreateParams) (*Asset, error) {
+	if params.FileName == "" {
 		return nil, fmt.Errorf("文件名不能为空")
 	}
-	if len(content) == 0 {
+	if len(params.Content) == 0 {
 		return nil, fmt.Errorf("文件内容不能为空")
 	}
 
-	s.client.logger.Debugf("上传文件: %s", fileName)
+	s.client.logger.Debugf("上传文件: %s", params.FileName)
 	response, err := s.client.doMultipartRequest(ctx, "asset/create", nil, map[string]multipartFile{
 		"file": {
-			FileName: fileName,
-			Content:  content,
+			FileName: params.FileName,
+			Content:  params.Content,
 		},
 	}, nil)
 	if err != nil {
@@ -62,16 +71,11 @@ func (s *AssetService) UploadFileContent(ctx context.Context, fileName string, c
 		return nil, fmt.Errorf("解析资源信息失败: %w", err)
 	}
 
-	s.client.logger.Infof("文件上传成功: %s -> %s", fileName, asset.URL)
+	s.client.logger.Infof("文件上传成功: %s -> %s", params.FileName, asset.URL)
 	return &asset, nil
 }
 
-// 数据结构定义
-
-// Asset 媒体资源信息
+// Asset 媒体资源信息。
 type Asset struct {
-	URL  string `json:"url"`  // 资源URL
-	Type string `json:"type"` // 资源类型
-	Name string `json:"name"` // 文件名
-	Size int64  `json:"size"` // 文件大小
+	URL string `json:"url"`
 }

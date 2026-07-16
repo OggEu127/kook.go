@@ -21,7 +21,7 @@ const (
 	// Version API版本
 	Version = "v3"
 	// UserAgent 用户代理
-	UserAgent = "KOOK-Go-SDK/1.1.1"
+	UserAgent = "KOOK-Go-SDK/1.2.0"
 )
 
 // TokenType 鉴权类型
@@ -45,33 +45,26 @@ type Client struct {
 	retryConfig *RetryConfig
 
 	// API服务
-	User      *UserService
-	Guild     *GuildService
-	Channel   *ChannelService
-	Message   *MessageService
-	Template  *TemplateService
-	Gateway   *GatewayService
-	Role      *RoleService
-	Game      *GameService
-	Friend    *FriendService
-	Invite    *InviteService
-	Asset     *AssetService
-	Intimacy  *IntimacyService
-	Badge     *BadgeService
-	Blacklist *BlacklistService
-	Emoji     *EmojiService
-	UserChat  *UserChatService
-	Thread    *ThreadService
-	Region    *RegionService
-	OAuth     *OAuthService
-	Live      *LiveService
-	Admin     *AdminService
-	Security  *SecurityService
-	Voice     *VoiceService
-	Item      *ItemService
-	Order     *OrderService
-	Coupon    *CouponService
-	Boost     *BoostService
+	Gateway       *GatewayService
+	User          *UserService
+	Guild         *GuildService
+	Channel       *ChannelService
+	ChannelUser   *ChannelUserService
+	Message       *MessageService
+	UserChat      *UserChatService
+	DirectMessage *DirectMessageService
+	GuildRole     *RoleService
+	GuildEmoji    *EmojiService
+	Blacklist     *BlacklistService
+	Invite        *InviteService
+	Asset         *AssetService
+	Intimacy      *IntimacyService
+	Friend        *FriendService
+	Game          *GameService
+	Badge         *BadgeService
+	Thread        *ThreadService
+	Voice         *VoiceService
+	Template      *TemplateService
 }
 
 // ClientOption 客户端配置选项
@@ -177,33 +170,26 @@ func NewClientWithError(token string, options ...ClientOption) (*Client, error) 
 	}
 
 	// 初始化API服务
+	client.Gateway = &GatewayService{client: client}
 	client.User = &UserService{client: client}
 	client.Guild = &GuildService{client: client}
 	client.Channel = &ChannelService{client: client}
+	client.ChannelUser = &ChannelUserService{client: client}
 	client.Message = &MessageService{client: client}
-	client.Template = &TemplateService{client: client}
-	client.Gateway = &GatewayService{client: client}
-	client.Role = &RoleService{client: client}
-	client.Game = &GameService{client: client}
-	client.Friend = &FriendService{client: client}
+	client.UserChat = &UserChatService{client: client}
+	client.DirectMessage = &DirectMessageService{client: client}
+	client.GuildRole = &RoleService{client: client}
+	client.GuildEmoji = &EmojiService{client: client}
+	client.Blacklist = &BlacklistService{client: client}
 	client.Invite = &InviteService{client: client}
 	client.Asset = &AssetService{client: client}
 	client.Intimacy = &IntimacyService{client: client}
+	client.Friend = &FriendService{client: client}
+	client.Game = &GameService{client: client}
 	client.Badge = &BadgeService{client: client}
-	client.Blacklist = &BlacklistService{client: client}
-	client.Emoji = &EmojiService{client: client}
-	client.UserChat = &UserChatService{client: client}
 	client.Thread = &ThreadService{client: client}
-	client.Region = &RegionService{client: client}
-	client.OAuth = &OAuthService{client: client}
-	client.Live = &LiveService{client: client}
-	client.Admin = &AdminService{client: client}
-	client.Security = &SecurityService{client: client}
 	client.Voice = &VoiceService{client: client}
-	client.Item = &ItemService{client: client}
-	client.Order = &OrderService{client: client}
-	client.Coupon = &CouponService{client: client}
-	client.Boost = &BoostService{client: client}
+	client.Template = &TemplateService{client: client}
 
 	return client, nil
 }
@@ -219,7 +205,11 @@ func (c *Client) Close() error {
 // buildURL 构建完整的API URL
 func (c *Client) buildURL(endpoint string) string {
 	endpoint = strings.TrimPrefix(endpoint, "/")
-	return fmt.Sprintf("%s/%s/%s", c.baseURL, Version, endpoint)
+	return fmt.Sprintf("%s/%s/%s", strings.TrimRight(c.baseURL, "/"), Version, endpoint)
+}
+
+func buildUnversionedURL(baseURL, endpoint string) string {
+	return fmt.Sprintf("%s/%s", strings.TrimRight(baseURL, "/"), strings.TrimLeft(endpoint, "/"))
 }
 
 // doRequest 执行HTTP请求
@@ -228,6 +218,57 @@ func (c *Client) doRequest(ctx context.Context, method, endpoint string, params 
 	return DoWithRetry(ctx, func(ctx context.Context) (*Response, error) {
 		return c.doSingleRequest(ctx, method, endpoint, params, query)
 	}, c.retryConfig, c.logger)
+}
+
+// BinaryResponse 表示图片等非 JSON API 的响应。
+type BinaryResponse struct {
+	StatusCode  int
+	ContentType string
+	ETag        string
+	Data        []byte
+}
+
+func (c *Client) doBinaryRequest(ctx context.Context, method, endpoint string, query map[string]string) (*BinaryResponse, error) {
+	requestURL := c.buildURL(endpoint)
+	if len(query) > 0 {
+		u, err := url.Parse(requestURL)
+		if err != nil {
+			return nil, fmt.Errorf("解析URL失败: %w", err)
+		}
+		q := u.Query()
+		for key, value := range query {
+			q.Set(key, value)
+		}
+		u.RawQuery = q.Encode()
+		requestURL = u.String()
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, requestURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("创建请求失败: %w", err)
+	}
+	req.Header.Set("Authorization", fmt.Sprintf("%s %s", c.tokenType, c.token))
+	req.Header.Set("User-Agent", UserAgent)
+	req.Header.Set("Accept-Language", "zh-cn")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("读取响应失败: %w", err)
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, NewKOOKErrorFromResponse(resp, body).WithContext(method, endpoint)
+	}
+	return &BinaryResponse{
+		StatusCode:  resp.StatusCode,
+		ContentType: resp.Header.Get("Content-Type"),
+		ETag:        resp.Header.Get("ETag"),
+		Data:        body,
+	}, nil
 }
 
 func (c *Client) doMultipartRequest(ctx context.Context, endpoint string, fields map[string]string, files map[string]multipartFile, query map[string]string) (*Response, error) {

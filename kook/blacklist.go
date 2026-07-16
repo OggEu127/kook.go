@@ -12,21 +12,27 @@ type BlacklistService struct {
 	client *Client
 }
 
-// GetBlacklistUsers 获取屏蔽用户列表
-func (s *BlacklistService) GetBlacklistUsers(ctx context.Context, guildID string, page, pageSize int) (*BlacklistResponse, error) {
-	if guildID == "" {
+type BlacklistListParams struct {
+	GuildID  string
+	Page     *int
+	PageSize *int
+}
+
+// GetBlacklistUsers 获取屏蔽用户列表。
+func (s *BlacklistService) GetBlacklistUsers(ctx context.Context, params BlacklistListParams) (*BlacklistResponse, error) {
+	if params.GuildID == "" {
 		return nil, fmt.Errorf("服务器ID不能为空")
 	}
 
 	query := map[string]string{
-		"guild_id": guildID,
+		"guild_id": params.GuildID,
 	}
 
-	if page > 0 {
-		query["page"] = strconv.Itoa(page)
+	if params.Page != nil {
+		query["page"] = strconv.Itoa(*params.Page)
 	}
-	if pageSize > 0 && pageSize <= 50 {
-		query["page_size"] = strconv.Itoa(pageSize)
+	if params.PageSize != nil {
+		query["page_size"] = strconv.Itoa(*params.PageSize)
 	}
 
 	resp, err := s.client.Get(ctx, "blacklist/list", query)
@@ -42,46 +48,58 @@ func (s *BlacklistService) GetBlacklistUsers(ctx context.Context, guildID string
 	return &result, nil
 }
 
-// CreateBlacklistUser 屏蔽用户
-func (s *BlacklistService) CreateBlacklistUser(ctx context.Context, guildID, userID string, remark string, delMsgDays int) error {
-	if guildID == "" {
+type BlacklistCreateParams struct {
+	GuildID    string
+	TargetID   string
+	Remark     string
+	DelMsgDays *int
+}
+
+// CreateBlacklistUser 屏蔽用户。
+func (s *BlacklistService) CreateBlacklistUser(ctx context.Context, params BlacklistCreateParams) error {
+	if params.GuildID == "" {
 		return fmt.Errorf("服务器ID不能为空")
 	}
-	if userID == "" {
+	if params.TargetID == "" {
 		return fmt.Errorf("用户ID不能为空")
 	}
 
-	params := map[string]interface{}{
-		"guild_id": guildID,
-		"user_id":  userID,
+	body := map[string]interface{}{
+		"guild_id":  params.GuildID,
+		"target_id": params.TargetID,
 	}
 
-	if remark != "" {
-		params["remark"] = remark
+	if params.Remark != "" {
+		body["remark"] = params.Remark
 	}
-	if delMsgDays > 0 {
-		params["del_msg_days"] = delMsgDays
+	if params.DelMsgDays != nil {
+		body["del_msg_days"] = *params.DelMsgDays
 	}
 
-	_, err := s.client.Post(ctx, "blacklist/create", params)
+	_, err := s.client.Post(ctx, "blacklist/create", body)
 	return err
 }
 
-// DeleteBlacklistUser 取消屏蔽用户
-func (s *BlacklistService) DeleteBlacklistUser(ctx context.Context, guildID, userID string) error {
-	if guildID == "" {
+type BlacklistDeleteParams struct {
+	GuildID  string
+	TargetID string
+}
+
+// DeleteBlacklistUser 取消屏蔽用户。
+func (s *BlacklistService) DeleteBlacklistUser(ctx context.Context, params BlacklistDeleteParams) error {
+	if params.GuildID == "" {
 		return fmt.Errorf("服务器ID不能为空")
 	}
-	if userID == "" {
+	if params.TargetID == "" {
 		return fmt.Errorf("用户ID不能为空")
 	}
 
-	params := map[string]interface{}{
-		"guild_id": guildID,
-		"user_id":  userID,
+	body := map[string]interface{}{
+		"guild_id":  params.GuildID,
+		"target_id": params.TargetID,
 	}
 
-	_, err := s.client.Post(ctx, "blacklist/delete", params)
+	_, err := s.client.Post(ctx, "blacklist/delete", body)
 	return err
 }
 
@@ -89,16 +107,15 @@ func (s *BlacklistService) DeleteBlacklistUser(ctx context.Context, guildID, use
 
 // BlacklistUser 屏蔽用户信息
 type BlacklistUser struct {
-	User      User   `json:"user"`       // 用户信息
-	Remark    string `json:"remark"`     // 屏蔽备注
-	UserID    string `json:"user_id"`    // 用户ID
-	CreatedAt int64  `json:"created_at"` // 屏蔽时间
-	UpdatedAt int64  `json:"updated_at"` // 更新时间
+	User        User   `json:"user"`
+	Remark      string `json:"remark"`
+	UserID      string `json:"user_id"`
+	CreatedTime int64  `json:"created_time"`
 }
 
 // BlacklistResponse 屏蔽用户列表响应
 type BlacklistResponse struct {
 	Items []BlacklistUser `json:"items"`
 	Meta  PaginationMeta  `json:"meta"`
-	Sort  map[string]int  `json:"sort"`
+	Sort  SortFields      `json:"sort"`
 }

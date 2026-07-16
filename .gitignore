@@ -45,3 +45,5 @@ temp*.go
 # 示例配置文件（包含敏感信息）
 config.json
 token.txt
+DETAILED_GUIDE.md
+CLAUDE.md 

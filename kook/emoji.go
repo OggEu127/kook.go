@@ -12,21 +12,27 @@ type EmojiService struct {
 	client *Client
 }
 
-// GetEmojiList 获取服务器表情列表
-func (s *EmojiService) GetEmojiList(ctx context.Context, guildID string, page, pageSize int) (*EmojiListResponse, error) {
-	if guildID == "" {
+type EmojiListParams struct {
+	GuildID  string
+	Page     *int
+	PageSize *int
+}
+
+// GetEmojiList 获取服务器表情列表。
+func (s *EmojiService) GetEmojiList(ctx context.Context, params EmojiListParams) (*EmojiListResponse, error) {
+	if params.GuildID == "" {
 		return nil, fmt.Errorf("服务器ID不能为空")
 	}
 
 	query := map[string]string{
-		"guild_id": guildID,
+		"guild_id": params.GuildID,
 	}
 
-	if page > 0 {
-		query["page"] = strconv.Itoa(page)
+	if params.Page != nil {
+		query["page"] = strconv.Itoa(*params.Page)
 	}
-	if pageSize > 0 && pageSize <= 50 {
-		query["page_size"] = strconv.Itoa(pageSize)
+	if params.PageSize != nil {
+		query["page_size"] = strconv.Itoa(*params.PageSize)
 	}
 
 	resp, err := s.client.Get(ctx, "guild-emoji/list", query)
@@ -42,22 +48,29 @@ func (s *EmojiService) GetEmojiList(ctx context.Context, guildID string, page, p
 	return &result, nil
 }
 
-// CreateEmoji 创建表情
-func (s *EmojiService) CreateEmoji(ctx context.Context, name, guildID string, emoji interface{}) (*Emoji, error) {
-	if name == "" {
-		return nil, fmt.Errorf("表情名称不能为空")
-	}
-	if guildID == "" {
+type EmojiCreateParams struct {
+	GuildID  string
+	Name     string
+	FileName string
+	Emoji    []byte
+}
+
+// CreateEmoji 创建服务器表情。
+func (s *EmojiService) CreateEmoji(ctx context.Context, params EmojiCreateParams) (*Emoji, error) {
+	if params.GuildID == "" {
 		return nil, fmt.Errorf("服务器ID不能为空")
 	}
-
-	params := map[string]interface{}{
-		"name":     name,
-		"guild_id": guildID,
-		"emoji":    emoji, // 可以是文件或URL
+	if params.FileName == "" || len(params.Emoji) == 0 {
+		return nil, fmt.Errorf("表情文件名和内容不能为空")
 	}
 
-	resp, err := s.client.Post(ctx, "guild-emoji/create", params)
+	fields := map[string]string{"guild_id": params.GuildID}
+	if params.Name != "" {
+		fields["name"] = params.Name
+	}
+	resp, err := s.client.doMultipartRequest(ctx, "guild-emoji/create", fields, map[string]multipartFile{
+		"emoji": {FileName: params.FileName, Content: params.Emoji},
+	}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -70,44 +83,41 @@ func (s *EmojiService) CreateEmoji(ctx context.Context, name, guildID string, em
 	return &result, nil
 }
 
-// UpdateEmoji 更新表情
-func (s *EmojiService) UpdateEmoji(ctx context.Context, id, name string) (*Emoji, error) {
-	if id == "" {
-		return nil, fmt.Errorf("表情ID不能为空")
-	}
-
-	params := map[string]interface{}{
-		"id": id,
-	}
-
-	if name != "" {
-		params["name"] = name
-	}
-
-	resp, err := s.client.Post(ctx, "guild-emoji/update", params)
-	if err != nil {
-		return nil, err
-	}
-
-	var result Emoji
-	if err := json.Unmarshal(resp.Data, &result); err != nil {
-		return nil, fmt.Errorf("解析表情信息失败: %w", err)
-	}
-
-	return &result, nil
+type EmojiUpdateParams struct {
+	ID   string
+	Name string
 }
 
-// DeleteEmoji 删除表情
-func (s *EmojiService) DeleteEmoji(ctx context.Context, id string) error {
-	if id == "" {
+// UpdateEmoji 更新服务器表情。
+func (s *EmojiService) UpdateEmoji(ctx context.Context, params EmojiUpdateParams) error {
+	if params.ID == "" {
+		return fmt.Errorf("表情ID不能为空")
+	}
+	if params.Name == "" {
+		return fmt.Errorf("表情名称不能为空")
+	}
+
+	_, err := s.client.Post(ctx, "guild-emoji/update", map[string]interface{}{
+		"id": params.ID, "name": params.Name,
+	})
+	return err
+}
+
+type EmojiDeleteParams struct {
+	ID string
+}
+
+// DeleteEmoji 删除服务器表情。
+func (s *EmojiService) DeleteEmoji(ctx context.Context, params EmojiDeleteParams) error {
+	if params.ID == "" {
 		return fmt.Errorf("表情ID不能为空")
 	}
 
-	params := map[string]interface{}{
-		"id": id,
+	body := map[string]interface{}{
+		"id": params.ID,
 	}
 
-	_, err := s.client.Post(ctx, "guild-emoji/delete", params)
+	_, err := s.client.Post(ctx, "guild-emoji/delete", body)
 	return err
 }
 
@@ -115,15 +125,14 @@ func (s *EmojiService) DeleteEmoji(ctx context.Context, id string) error {
 
 // Emoji 表情信息
 type Emoji struct {
-	ID     string `json:"id"`      // 表情ID
-	Name   string `json:"name"`    // 表情名称
-	URL    string `json:"url"`     // 表情URL
-	UserID string `json:"user_id"` // 创建者ID
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	UserInfo User   `json:"user_info"`
 }
 
 // EmojiListResponse 表情列表响应
 type EmojiListResponse struct {
 	Items []Emoji        `json:"items"`
 	Meta  PaginationMeta `json:"meta"`
-	Sort  map[string]int `json:"sort"`
+	Sort  SortFields     `json:"sort"`
 }

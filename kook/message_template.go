@@ -27,7 +27,7 @@ func (s *TemplateService) GetTemplateList(ctx context.Context) (*ListTemplatesRe
 }
 
 // CreateTemplate 创建模板
-func (s *TemplateService) CreateTemplate(ctx context.Context, params TemplateParams) (*Template, error) {
+func (s *TemplateService) CreateTemplate(ctx context.Context, params CreateTemplateParams) (*Template, error) {
 	if params.Title == "" {
 		return nil, fmt.Errorf("模板标题不能为空")
 	}
@@ -35,7 +35,7 @@ func (s *TemplateService) CreateTemplate(ctx context.Context, params TemplatePar
 		return nil, fmt.Errorf("模板内容不能为空")
 	}
 
-	resp, err := s.client.Post(ctx, "template/create", params.toMap(false))
+	resp, err := s.client.Post(ctx, "template/create", params.toMap())
 	if err != nil {
 		return nil, err
 	}
@@ -44,12 +44,12 @@ func (s *TemplateService) CreateTemplate(ctx context.Context, params TemplatePar
 }
 
 // UpdateTemplate 更新模板
-func (s *TemplateService) UpdateTemplate(ctx context.Context, params TemplateParams) (*Template, error) {
+func (s *TemplateService) UpdateTemplate(ctx context.Context, params UpdateTemplateParams) (*Template, error) {
 	if params.ID == "" {
 		return nil, fmt.Errorf("模板ID不能为空")
 	}
 
-	resp, err := s.client.Post(ctx, "template/update", params.toMap(true))
+	resp, err := s.client.Post(ctx, "template/update", params.toMap())
 	if err != nil {
 		return nil, err
 	}
@@ -57,14 +57,18 @@ func (s *TemplateService) UpdateTemplate(ctx context.Context, params TemplatePar
 	return parseTemplateModel(resp.Data)
 }
 
-// DeleteTemplate 删除模板
-func (s *TemplateService) DeleteTemplate(ctx context.Context, id string) error {
-	if id == "" {
+type DeleteTemplateParams struct {
+	ID string
+}
+
+// DeleteTemplate 删除模板。
+func (s *TemplateService) DeleteTemplate(ctx context.Context, params DeleteTemplateParams) error {
+	if params.ID == "" {
 		return fmt.Errorf("模板ID不能为空")
 	}
 
 	_, err := s.client.Post(ctx, "template/delete", map[string]interface{}{
-		"id": id,
+		"id": params.ID,
 	})
 	return err
 }
@@ -91,46 +95,63 @@ type Template struct {
 	Content     string `json:"content"`
 }
 
-// TemplateParams 创建或更新模板参数
-type TemplateParams struct {
-	ID          string `json:"id,omitempty"`
-	Title       string `json:"title,omitempty"`
-	Type        int    `json:"type,omitempty"`
-	MsgType     int    `json:"msgtype,omitempty"`
-	TestData    string `json:"test_data,omitempty"`
-	TestChannel string `json:"test_channel,omitempty"`
-	Content     string `json:"content,omitempty"`
+// CreateTemplateParams 创建模板参数。
+type CreateTemplateParams struct {
+	Title       string
+	Content     string
+	Type        *int
+	MsgType     *int
+	TestData    *string
+	TestChannel *string
 }
 
-func (p TemplateParams) toMap(includeID bool) map[string]interface{} {
-	params := make(map[string]interface{})
-	if includeID {
-		params["id"] = p.ID
-	}
-	if p.Title != "" {
-		params["title"] = p.Title
-	}
-	if p.Content != "" {
-		params["content"] = p.Content
-	}
-	if p.TestData != "" {
-		params["test_data"] = p.TestData
-	}
-	if p.TestChannel != "" {
-		params["test_channel"] = p.TestChannel
-	}
-	if p.Type != 0 {
-		params["type"] = p.Type
-	}
-	if p.MsgType != 0 {
-		params["msgtype"] = p.MsgType
-	}
+func (p CreateTemplateParams) toMap() map[string]interface{} {
+	params := map[string]interface{}{"title": p.Title, "content": p.Content}
+	setTemplateOptionalFields(params, p.Type, p.MsgType, p.TestData, p.TestChannel)
 	return params
+}
+
+// UpdateTemplateParams 更新模板参数。指针字段允许显式发送零值或空字符串。
+type UpdateTemplateParams struct {
+	ID          string
+	Title       *string
+	Content     *string
+	Type        *int
+	MsgType     *int
+	TestData    *string
+	TestChannel *string
+}
+
+func (p UpdateTemplateParams) toMap() map[string]interface{} {
+	params := map[string]interface{}{"id": p.ID}
+	if p.Title != nil {
+		params["title"] = *p.Title
+	}
+	if p.Content != nil {
+		params["content"] = *p.Content
+	}
+	setTemplateOptionalFields(params, p.Type, p.MsgType, p.TestData, p.TestChannel)
+	return params
+}
+
+func setTemplateOptionalFields(params map[string]interface{}, templateType, msgType *int, testData, testChannel *string) {
+	if templateType != nil {
+		params["type"] = *templateType
+	}
+	if msgType != nil {
+		params["msgtype"] = *msgType
+	}
+	if testData != nil {
+		params["test_data"] = *testData
+	}
+	if testChannel != nil {
+		params["test_channel"] = *testChannel
+	}
 }
 
 // ListTemplatesResponse 模板列表响应
 type ListTemplatesResponse struct {
 	Items []Template     `json:"items"`
 	Meta  PaginationMeta `json:"meta"`
-	Sort  map[string]int `json:"sort"`
+	Sort  SortFields     `json:"sort"`
 }

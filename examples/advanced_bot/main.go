@@ -21,21 +21,32 @@ func main() {
 
 	// 创建客户端
 	client := kook.NewClient(token)
+	defer client.Close()
 
 	// 创建WebSocket客户端
 	wsClient := kook.NewWebSocketClient(client, false)
 
 	// 设置消息处理器
-	wsClient.OnEvent(kook.EventTypeTextMessage, func(event *kook.Event) {
-		author := getEventAuthor(event.Extra)
-		guildID := getEventGuildID(event.Extra)
+	wsClient.OnMessage(kook.MessageTypeText, func(event *kook.MessageEvent) {
+		var extra messageExtra
+		if err := event.DecodeExtra(&extra); err != nil {
+			log.Printf("解析消息扩展字段失败: %v", err)
+			return
+		}
+		author := extra.Author
+		guildID := extra.GuildID
 
 		// 忽略机器人消息
 		if author.Bot {
 			return
 		}
 
-		content := strings.TrimSpace(event.Content)
+		contentValue, err := event.TextContent()
+		if err != nil {
+			log.Printf("解析消息内容失败: %v", err)
+			return
+		}
+		content := strings.TrimSpace(contentValue)
 		channelID := event.TargetID
 		userID := author.ID
 
@@ -69,9 +80,6 @@ func main() {
 			if len(parts) > 2 {
 				handleMusicCommand(client, channelID, parts[1], parts[2])
 			}
-
-		case strings.HasPrefix(content, "!regions"):
-			handleRegionsCommand(client, channelID)
 
 		case strings.HasPrefix(content, "!invites"):
 			handleInvitesCommand(client, channelID, guildID)
@@ -109,7 +117,7 @@ func main() {
 	<-c
 
 	log.Println("正在关闭机器人...")
-	wsClient.Close()
+	_ = wsClient.Close()
 }
 
 // 帮助命令
@@ -122,9 +130,8 @@ func handleHelpCommand(client *kook.Client, channelID string) {
 • !roles - 查看服务器角色列表
 • !emojis - 查看服务器表情列表
 • !blacklist - 查看服务器屏蔽用户
-• !regions - 查看可用区域
 • !invites - 查看服务器邀请
-• !badges - 查看服务器徽章
+• !badges - 查看服务器 Badge 图片信息
 
 **消息操作：**
 • !pin - 置顶当前消息
@@ -151,7 +158,9 @@ func handleRolesCommand(client *kook.Client, channelID, guildID string) {
 		return
 	}
 
-	roles, err := client.Role.GetRoleList(context.Background(), guildID, 1, 10)
+	roles, err := client.GuildRole.GetRoleList(context.Background(), kook.RoleListParams{
+		GuildID: guildID, Page: intPtr(1), PageSize: intPtr(10),
+	})
 	if err != nil {
 		log.Printf("获取角色列表失败: %v", err)
 		sendReply(client, channelID, "获取角色列表失败："+err.Error())
@@ -178,7 +187,9 @@ func handleEmojisCommand(client *kook.Client, channelID, guildID string) {
 		return
 	}
 
-	emojis, err := client.Emoji.GetEmojiList(context.Background(), guildID, 1, 10)
+	emojis, err := client.GuildEmoji.GetEmojiList(context.Background(), kook.EmojiListParams{
+		GuildID: guildID, Page: intPtr(1), PageSize: intPtr(10),
+	})
 	if err != nil {
 		log.Printf("获取表情列表失败: %v", err)
 		sendReply(client, channelID, "获取表情列表失败："+err.Error())
@@ -205,7 +216,9 @@ func handleBlacklistCommand(client *kook.Client, channelID, guildID string) {
 		return
 	}
 
-	blacklist, err := client.Blacklist.GetBlacklistUsers(context.Background(), guildID, 1, 10)
+	blacklist, err := client.Blacklist.GetBlacklistUsers(context.Background(), kook.BlacklistListParams{
+		GuildID: guildID, Page: intPtr(1), PageSize: intPtr(10),
+	})
 	if err != nil {
 		log.Printf("获取屏蔽用户列表失败: %v", err)
 		sendReply(client, channelID, "获取屏蔽用户列表失败："+err.Error())
@@ -227,7 +240,7 @@ func handleBlacklistCommand(client *kook.Client, channelID, guildID string) {
 
 // 置顶消息命令
 func handlePinCommand(client *kook.Client, channelID, msgID string) {
-	err := client.Message.PinMessage(context.Background(), msgID, channelID)
+	err := client.Message.PinMessage(context.Background(), kook.MessagePinParams{MsgID: msgID, TargetID: channelID})
 	if err != nil {
 		log.Printf("置顶消息失败: %v", err)
 		sendReply(client, channelID, "置顶消息失败："+err.Error())
@@ -240,7 +253,7 @@ func handlePinCommand(client *kook.Client, channelID, msgID string) {
 // 游戏动态命令
 func handleGameCommand(client *kook.Client, channelID, gameName string) {
 	// 首先获取游戏列表，查找匹配的游戏
-	games, err := client.Game.GetGameList(context.Background(), "")
+	games, err := client.Game.GetGameList(context.Background(), kook.GameListParams{})
 	if err != nil {
 		sendReply(client, channelID, "获取游戏列表失败："+err.Error())
 		return
@@ -259,7 +272,9 @@ func handleGameCommand(client *kook.Client, channelID, gameName string) {
 		return
 	}
 
-	err = client.Game.AddGameActivity(context.Background(), gameID)
+	err = client.Game.AddActivity(context.Background(), kook.GameActivityParams{
+		ID: &gameID, DataType: kook.GameActivityTypeGame,
+	})
 	if err != nil {
 		sendReply(client, channelID, "设置游戏动态失败："+err.Error())
 		return
@@ -270,36 +285,20 @@ func handleGameCommand(client *kook.Client, channelID, gameName string) {
 
 // 音乐动态命令
 func handleMusicCommand(client *kook.Client, channelID, singer, songName string) {
-	params := kook.MusicActivityParams{
+	params := kook.GameActivityParams{
+		DataType:  kook.GameActivityTypeMusic,
 		Software:  kook.SoftwareCloudMusic,
 		Singer:    singer,
 		MusicName: songName,
 	}
 
-	err := client.Game.AddMusicActivity(context.Background(), params)
+	err := client.Game.AddActivity(context.Background(), params)
 	if err != nil {
 		sendReply(client, channelID, "设置音乐动态失败："+err.Error())
 		return
 	}
 
 	sendReply(client, channelID, fmt.Sprintf("已设置音乐动态：%s - %s", singer, songName))
-}
-
-// 区域列表命令
-func handleRegionsCommand(client *kook.Client, channelID string) {
-	regions, err := client.Region.GetRegionList(context.Background())
-	if err != nil {
-		log.Printf("获取区域列表失败: %v", err)
-		sendReply(client, channelID, "获取区域列表失败："+err.Error())
-		return
-	}
-
-	regionText := "**可用区域列表：**\n"
-	for _, region := range regions {
-		regionText += fmt.Sprintf("• %s (ID: %s, 拥挤度: %d%%)\n", region.Name, region.ID, region.Crowding)
-	}
-
-	sendReply(client, channelID, regionText)
 }
 
 // 邀请列表命令
@@ -309,7 +308,9 @@ func handleInvitesCommand(client *kook.Client, channelID, guildID string) {
 		return
 	}
 
-	invites, err := client.Invite.GetInviteList(context.Background(), guildID, 1, 10)
+	invites, err := client.Invite.GetInviteList(context.Background(), kook.InviteListParams{
+		GuildID: guildID, Page: intPtr(1), PageSize: intPtr(10),
+	})
 	if err != nil {
 		log.Printf("获取邀请列表失败: %v", err)
 		sendReply(client, channelID, "获取邀请列表失败："+err.Error())
@@ -336,28 +337,17 @@ func handleBadgesCommand(client *kook.Client, channelID, guildID string) {
 		return
 	}
 
-	badges, err := client.Badge.GetGuildBadges(context.Background(), guildID)
+	badge, err := client.Badge.GetGuildBadge(context.Background(), kook.BadgeParams{
+		GuildID: guildID,
+		Style:   kook.BadgeStyleOnlineAndTotal,
+	})
 	if err != nil {
 		log.Printf("获取徽章列表失败: %v", err)
 		sendReply(client, channelID, "获取徽章列表失败："+err.Error())
 		return
 	}
 
-	if len(badges) == 0 {
-		sendReply(client, channelID, "此服务器没有徽章。")
-		return
-	}
-
-	badgeText := "**服务器徽章列表：**\n"
-	for _, badge := range badges {
-		status := "🔒"
-		if badge.Unlocked {
-			status = "✅"
-		}
-		badgeText += fmt.Sprintf("• %s %s (等级: %d)\n", status, badge.Name, badge.Level)
-	}
-
-	sendReply(client, channelID, badgeText)
+	sendReply(client, channelID, fmt.Sprintf("Badge 已获取：%s，%d 字节，ETag=%s", badge.ContentType, len(badge.Data), badge.ETag))
 }
 
 // 昵称修改命令
@@ -367,7 +357,9 @@ func handleNicknameCommand(client *kook.Client, channelID, guildID, userID, nick
 		return
 	}
 
-	err := client.Guild.UpdateNickname(context.Background(), guildID, userID, nickname)
+	err := client.Guild.UpdateGuildMemberNickname(context.Background(), kook.GuildNicknameParams{
+		GuildID: guildID, UserID: userID, Nickname: &nickname,
+	})
 	if err != nil {
 		log.Printf("修改昵称失败: %v", err)
 		sendReply(client, channelID, "修改昵称失败："+err.Error())
@@ -379,12 +371,11 @@ func handleNicknameCommand(client *kook.Client, channelID, guildID, userID, nick
 
 // 文件上传命令
 func handleUploadCommand(client *kook.Client, channelID string) {
-	// 由于Asset.UploadFileContent方法可能不存在，我们使用CreateAsset替代
-	// 这里只是演示，实际使用时需要传入真实的文件路径
-	sendReply(client, channelID, "文件上传功能演示 - 请提供实际文件路径使用Asset.CreateAsset方法")
+	// 这里只提示调用方式，实际使用时应传入真实文件路径。
+	sendReply(client, channelID, "文件上传请使用 client.Asset.CreateFromPath(ctx, kook.AssetPathParams{Path: filePath})")
 
 	// 实际的文件上传示例：
-	// asset, err := client.Asset.CreateAsset(context.Background(), "path/to/file.txt")
+	// asset, err := client.Asset.CreateFromPath(context.Background(), kook.AssetPathParams{Path: "path/to/file.txt"})
 	// if err != nil {
 	//     log.Printf("上传文件失败: %v", err)
 	//     sendReply(client, channelID, "上传文件失败："+err.Error())
@@ -394,57 +385,26 @@ func handleUploadCommand(client *kook.Client, channelID string) {
 	// sendReply(client, channelID, message)
 }
 
-type messageAuthor struct {
-	ID       string
-	Username string
-	Bot      bool
-}
-
-func getEventAuthor(extra interface{}) messageAuthor {
-	extraMap, ok := extra.(map[string]interface{})
-	if !ok {
-		return messageAuthor{}
-	}
-	authorMap, ok := extraMap["author"].(map[string]interface{})
-	if !ok {
-		return messageAuthor{}
-	}
-
-	return messageAuthor{
-		ID:       asString(authorMap["id"]),
-		Username: asString(authorMap["username"]),
-		Bot:      asBool(authorMap["bot"]),
-	}
-}
-
-func getEventGuildID(extra interface{}) string {
-	extraMap, ok := extra.(map[string]interface{})
-	if !ok {
-		return ""
-	}
-	return asString(extraMap["guild_id"])
-}
-
-func asString(v interface{}) string {
-	s, _ := v.(string)
-	return s
-}
-
-func asBool(v interface{}) bool {
-	b, _ := v.(bool)
-	return b
+type messageExtra struct {
+	Author  kook.User `json:"author"`
+	GuildID string    `json:"guild_id"`
 }
 
 // 发送回复消息
 func sendReply(client *kook.Client, channelID, content string) {
-	params := kook.SendMessageParams{
+	messageType := kook.MessageTypeText
+	params := kook.MessageCreateParams{
 		TargetID: channelID,
 		Content:  content,
-		MsgType:  1, // 文本消息
+		Type:     &messageType,
 	}
 
-	_, err := client.Message.SendMessage(context.Background(), params)
+	_, err := client.Message.Create(context.Background(), params)
 	if err != nil {
 		log.Printf("发送消息失败: %v", err)
 	}
+}
+
+func intPtr(value int) *int {
+	return &value
 }

@@ -11,11 +11,15 @@ type GameService struct {
 	client *Client
 }
 
-// GetGameList 获取游戏列表
-func (s *GameService) GetGameList(ctx context.Context, gameType string) (*ListGamesResponse, error) {
+type GameListParams struct {
+	Type string
+}
+
+// GetGameList 获取游戏列表。
+func (s *GameService) GetGameList(ctx context.Context, params GameListParams) (*ListGamesResponse, error) {
 	query := make(map[string]string)
-	if gameType != "" {
-		query["type"] = gameType
+	if params.Type != "" {
+		query["type"] = params.Type
 	}
 
 	resp, err := s.client.Get(ctx, "game", query)
@@ -31,21 +35,26 @@ func (s *GameService) GetGameList(ctx context.Context, gameType string) (*ListGa
 	return &result, nil
 }
 
-// CreateGame 添加游戏
-func (s *GameService) CreateGame(ctx context.Context, name, icon string) (*Game, error) {
-	if name == "" {
+type GameCreateParams struct {
+	Name string
+	Icon string
+}
+
+// CreateGame 添加游戏。
+func (s *GameService) CreateGame(ctx context.Context, params GameCreateParams) (*Game, error) {
+	if params.Name == "" {
 		return nil, fmt.Errorf("游戏名称不能为空")
 	}
 
-	params := map[string]interface{}{
-		"name": name,
+	body := map[string]interface{}{
+		"name": params.Name,
 	}
 
-	if icon != "" {
-		params["icon"] = icon
+	if params.Icon != "" {
+		body["icon"] = params.Icon
 	}
 
-	resp, err := s.client.Post(ctx, "game/create", params)
+	resp, err := s.client.Post(ctx, "game/create", body)
 	if err != nil {
 		return nil, err
 	}
@@ -58,24 +67,30 @@ func (s *GameService) CreateGame(ctx context.Context, name, icon string) (*Game,
 	return &game, nil
 }
 
-// UpdateGame 更新游戏
-func (s *GameService) UpdateGame(ctx context.Context, id int, name, icon string) (*Game, error) {
-	if id <= 0 {
+type GameUpdateParams struct {
+	ID   int
+	Name *string
+	Icon *string
+}
+
+// UpdateGame 更新游戏。
+func (s *GameService) UpdateGame(ctx context.Context, params GameUpdateParams) (*Game, error) {
+	if params.ID <= 0 {
 		return nil, fmt.Errorf("游戏ID不能为空")
 	}
 
-	params := map[string]interface{}{
-		"id": id,
+	body := map[string]interface{}{
+		"id": params.ID,
 	}
 
-	if name != "" {
-		params["name"] = name
+	if params.Name != nil {
+		body["name"] = *params.Name
 	}
-	if icon != "" {
-		params["icon"] = icon
+	if params.Icon != nil {
+		body["icon"] = *params.Icon
 	}
 
-	resp, err := s.client.Post(ctx, "game/update", params)
+	resp, err := s.client.Post(ctx, "game/update", body)
 	if err != nil {
 		return nil, err
 	}
@@ -88,82 +103,80 @@ func (s *GameService) UpdateGame(ctx context.Context, id int, name, icon string)
 	return &game, nil
 }
 
-// DeleteGame 删除游戏
-func (s *GameService) DeleteGame(ctx context.Context, id int) error {
-	if id <= 0 {
+type GameDeleteParams struct {
+	ID int
+}
+
+// DeleteGame 删除游戏。
+func (s *GameService) DeleteGame(ctx context.Context, params GameDeleteParams) error {
+	if params.ID <= 0 {
 		return fmt.Errorf("游戏ID不能为空")
 	}
 
-	params := map[string]interface{}{
-		"id": id,
+	body := map[string]interface{}{
+		"id": params.ID,
 	}
 
-	_, err := s.client.Post(ctx, "game/delete", params)
+	_, err := s.client.Post(ctx, "game/delete", body)
 	return err
 }
 
-// AddGameActivity 添加游戏活动记录（开始玩游戏）
-func (s *GameService) AddGameActivity(ctx context.Context, id int) error {
-	if id <= 0 {
-		return fmt.Errorf("游戏ID不能为空")
-	}
-
-	params := map[string]interface{}{
-		"id":        id,
-		"data_type": 1, // 1表示游戏
-	}
-
-	_, err := s.client.Post(ctx, "game/activity", params)
-	return err
+type GameActivityParams struct {
+	ID        *int
+	DataType  int
+	Software  string
+	Singer    string
+	MusicName string
 }
 
-// AddMusicActivity 添加音乐活动记录（开始听音乐）
-func (s *GameService) AddMusicActivity(ctx context.Context, params MusicActivityParams) error {
-	if params.Singer == "" {
-		return fmt.Errorf("歌手名不能为空")
+// AddActivity 添加游戏或音乐动态。
+func (s *GameService) AddActivity(ctx context.Context, params GameActivityParams) error {
+	if params.DataType != GameActivityTypeGame && params.DataType != GameActivityTypeMusic {
+		return fmt.Errorf("数据类型必须为1（游戏）或2（音乐）")
 	}
-	if params.MusicName == "" {
-		return fmt.Errorf("歌曲名不能为空")
+	if params.DataType == GameActivityTypeGame && (params.ID == nil || *params.ID <= 0) {
+		return fmt.Errorf("游戏动态的游戏ID不能为空")
 	}
-
-	requestParams := map[string]interface{}{
-		"data_type":  2, // 2表示音乐
-		"singer":     params.Singer,
-		"music_name": params.MusicName,
+	if params.DataType == GameActivityTypeMusic && (params.Singer == "" || params.MusicName == "") {
+		return fmt.Errorf("音乐动态的歌手名和歌曲名不能为空")
 	}
 
+	body := map[string]interface{}{
+		"data_type": params.DataType,
+	}
+	if params.ID != nil {
+		body["id"] = *params.ID
+	}
 	if params.Software != "" {
-		requestParams["software"] = params.Software
-	} else {
-		requestParams["software"] = "cloudmusic" // 默认网易云音乐
+		body["software"] = params.Software
+	}
+	if params.Singer != "" {
+		body["singer"] = params.Singer
+	}
+	if params.MusicName != "" {
+		body["music_name"] = params.MusicName
 	}
 
-	_, err := s.client.Post(ctx, "game/activity", requestParams)
+	_, err := s.client.Post(ctx, "game/activity", body)
 	return err
 }
 
-// DeleteActivity 删除活动记录（结束玩游戏/听音乐）
-func (s *GameService) DeleteActivity(ctx context.Context, dataType int) error {
-	if dataType != 1 && dataType != 2 {
+type GameDeleteActivityParams struct {
+	DataType int
+}
+
+// DeleteActivity 删除游戏或音乐动态。
+func (s *GameService) DeleteActivity(ctx context.Context, params GameDeleteActivityParams) error {
+	if params.DataType != GameActivityTypeGame && params.DataType != GameActivityTypeMusic {
 		return fmt.Errorf("数据类型必须为1（游戏）或2（音乐）")
 	}
 
-	params := map[string]interface{}{
-		"data_type": dataType,
+	body := map[string]interface{}{
+		"data_type": params.DataType,
 	}
 
-	_, err := s.client.Post(ctx, "game/delete-activity", params)
+	_, err := s.client.Post(ctx, "game/delete-activity", body)
 	return err
-}
-
-// DeleteGameActivity 删除游戏活动记录（结束玩游戏）
-func (s *GameService) DeleteGameActivity(ctx context.Context) error {
-	return s.DeleteActivity(ctx, 1)
-}
-
-// DeleteMusicActivity 删除音乐活动记录（结束听音乐）
-func (s *GameService) DeleteMusicActivity(ctx context.Context) error {
-	return s.DeleteActivity(ctx, 2)
 }
 
 // 数据结构定义
@@ -178,20 +191,14 @@ type Game struct {
 	ProcessName []string `json:"process_name"` // 进程名称列表
 	ProductName []string `json:"product_name"` // 产品名称列表
 	Icon        string   `json:"icon"`         // 游戏图标URL
-}
-
-// MusicActivityParams 音乐活动参数
-type MusicActivityParams struct {
-	Software  string `json:"software"`   // 软件名：cloudmusic, qqmusic, kugou
-	Singer    string `json:"singer"`     // 歌手名
-	MusicName string `json:"music_name"` // 歌曲名
+	StartTime   int64    `json:"start_time"`   // 动态开始时间
 }
 
 // ListGamesResponse 游戏列表响应
 type ListGamesResponse struct {
 	Items []Game         `json:"items"`
 	Meta  PaginationMeta `json:"meta"`
-	Sort  map[string]int `json:"sort"`
+	Sort  SortFields     `json:"sort"`
 }
 
 // 游戏类型常量
@@ -199,6 +206,11 @@ const (
 	GameTypeAll    = "0" // 全部
 	GameTypeUser   = "1" // 用户创建
 	GameTypeSystem = "2" // 系统创建
+)
+
+const (
+	GameActivityTypeGame  = 1
+	GameActivityTypeMusic = 2
 )
 
 // 音乐软件常量

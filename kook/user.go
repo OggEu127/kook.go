@@ -26,18 +26,24 @@ func (s *UserService) GetMe(ctx context.Context) (*User, error) {
 	return &user, nil
 }
 
+// UserViewParams 获取目标用户参数。
+type UserViewParams struct {
+	UserID  string
+	GuildID string
+}
+
 // GetUser 获取指定用户信息
-func (s *UserService) GetUser(ctx context.Context, userID string, guildID string) (*User, error) {
-	if userID == "" {
+func (s *UserService) GetUser(ctx context.Context, params UserViewParams) (*User, error) {
+	if params.UserID == "" {
 		return nil, fmt.Errorf("用户ID不能为空")
 	}
 
 	query := map[string]string{
-		"user_id": userID,
+		"user_id": params.UserID,
 	}
 
-	if guildID != "" {
-		query["guild_id"] = guildID
+	if params.GuildID != "" {
+		query["guild_id"] = params.GuildID
 	}
 
 	resp, err := s.client.Get(ctx, "user/view", query)
@@ -51,49 +57,6 @@ func (s *UserService) GetUser(ctx context.Context, userID string, guildID string
 	}
 
 	return &user, nil
-}
-
-// GetUserOnlineStatus 获取用户在线状态
-//
-// Deprecated: KOOK 官方 user/online 是 Webhook 模式机器人上线接口，
-// 不是指定用户在线状态查询。请使用 GetOnlineStatus 查询机器人在线状态。
-func (s *UserService) GetUserOnlineStatus(ctx context.Context, userID string) (bool, error) {
-	return false, fmt.Errorf("GetUserOnlineStatus 已废弃：KOOK 官方没有指定用户在线状态查询接口")
-}
-
-// UpdateUserInfo 更新用户信息
-//
-// Deprecated: 当前 KOOK 官方用户接口未提供 user/update。
-func (s *UserService) UpdateUserInfo(ctx context.Context, params UpdateUserParams) (*User, error) {
-	return nil, fmt.Errorf("UpdateUserInfo 已废弃：KOOK 官方没有 user/update 接口")
-}
-
-// UpdateUserParams 更新用户信息参数
-type UpdateUserParams struct {
-	Username string `json:"username,omitempty"` // 用户名
-	Avatar   string `json:"avatar,omitempty"`   // 头像（base64或URL）
-	Banner   string `json:"banner,omitempty"`   // 横幅图片URL
-}
-
-// BlockUser 屏蔽用户
-//
-// Deprecated: 当前 KOOK 官方用户接口未提供 user/block。
-func (s *UserService) BlockUser(ctx context.Context, userID string) error {
-	return fmt.Errorf("BlockUser 已废弃：KOOK 官方没有 user/block 接口")
-}
-
-// UnblockUser 取消屏蔽用户
-//
-// Deprecated: 当前 KOOK 官方用户接口未提供 user/unblock。
-func (s *UserService) UnblockUser(ctx context.Context, userID string) error {
-	return fmt.Errorf("UnblockUser 已废弃：KOOK 官方没有 user/unblock 接口")
-}
-
-// GetBlockedUsers 获取被屏蔽的用户列表
-//
-// Deprecated: 当前 KOOK 官方用户接口未提供 user/blocked。
-func (s *UserService) GetBlockedUsers(ctx context.Context) ([]User, error) {
-	return nil, fmt.Errorf("GetBlockedUsers 已废弃：KOOK 官方没有 user/blocked 接口")
 }
 
 // SetOnline 上线机器人（仅限Webhook使用）

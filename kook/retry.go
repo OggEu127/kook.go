@@ -64,12 +64,6 @@ func IsRetryableError(err error) bool {
 		return kookErr.IsRetryable()
 	}
 
-	// 向后兼容的 APIError 检查
-	if apiErr, ok := err.(*APIError); ok {
-		// KOOK 5xx 是 50xxx；42900 为限流
-		return (apiErr.Code >= 50000 && apiErr.Code < 60000) || apiErr.Code == 429 || apiErr.Code == 42900
-	}
-
 	return false
 }
 
@@ -77,9 +71,6 @@ func IsRetryableError(err error) bool {
 func IsRateLimitError(err error) bool {
 	if kookErr, ok := IsKOOKError(err); ok {
 		return kookErr.IsRateLimited()
-	}
-	if apiErr, ok := err.(*APIError); ok {
-		return apiErr.Code == 429
 	}
 	return false
 }

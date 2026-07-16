@@ -1,93 +1,127 @@
-.PHONY: build test clean install deps example-simple example-webhook example-api
+.PHONY: all deps tidy test test-race test-integration test-mutation test-oauth \
+	build build-all build-examples run fmt fmt-check vet lint clean install docs \
+	example-simple example-webhook example-api example-advanced example-complete \
+	verify test-full help
 
-# 变量定义
-GO := go
+GO ?= go
+GOFMT ?= gofmt
 PROJECT_NAME := kook-go-sdk
 BUILD_DIR := build
+EXAMPLES := simple_bot webhook_bot api_usage advanced_bot complete_api_demo
 
-# 默认目标
-all: deps test build
+all: test build-all
 
-# 安装依赖
+# 下载 go.mod 中声明的依赖，不修改 go.mod 或 go.sum。
 deps:
 	$(GO) mod download
+
+# 整理依赖；仅在有意更新依赖时运行。
+tidy:
 	$(GO) mod tidy
 
-# 运行测试
+# 默认测试完全离线，不需要 KOOK 凭据。
 test:
-	$(GO) test -v ./...
+	$(GO) test -short ./...
 
-# 构建主程序
+test-race:
+	$(GO) test -race -short ./...
+
+# 运行真实 KOOK 只读测试，所需环境变量见 DETAILED_GUIDE.md。
+test-integration:
+	$(GO) test ./...
+
+# 该目标会创建、更新并删除真实资源，应使用隔离测试服务器。
+test-mutation:
+	KOOK_ENABLE_MUTATION_TESTS=1 $(GO) test ./kook -run '^TestKOOKMutationIntegration$$' -count=1 -v
+
+# OAuth 授权码通常只能使用一次。
+test-oauth:
+	KOOK_ENABLE_OAUTH_TEST=1 $(GO) test ./kook -run '^TestKOOKOAuthIntegration$$' -count=1 -v
+
+# 生成根目录示例程序的本地二进制。
 build:
 	mkdir -p $(BUILD_DIR)
 	$(GO) build -o $(BUILD_DIR)/$(PROJECT_NAME) .
 
-# 构建示例程序
+# 验证 SDK 和所有示例包都能编译，不生成仓库内产物。
+build-all:
+	$(GO) build ./...
+
 build-examples:
 	mkdir -p $(BUILD_DIR)/examples
-	$(GO) build -o $(BUILD_DIR)/examples/simple_bot ./examples/simple_bot
-	$(GO) build -o $(BUILD_DIR)/examples/webhook_bot ./examples/webhook_bot
-	$(GO) build -o $(BUILD_DIR)/examples/api_usage ./examples/api_usage
+	@for example in $(EXAMPLES); do \
+		echo "building examples/$$example"; \
+		$(GO) build -o "$(BUILD_DIR)/examples/$$example" "./examples/$$example" || exit 1; \
+	done
 
-# 运行简单机器人示例
-example-simple:
-	$(GO) run examples/simple_bot/main.go
-
-# 运行Webhook机器人示例
-example-webhook:
-	$(GO) run examples/webhook_bot/main.go
-
-# 运行API使用示例
-example-api:
-	$(GO) run examples/api_usage/main.go
-
-# 运行主程序测试
 run:
-	$(GO) run main.go
+	$(GO) run .
 
-# 格式化代码
+example-simple:
+	$(GO) run ./examples/simple_bot
+
+example-webhook:
+	$(GO) run ./examples/webhook_bot
+
+example-api:
+	$(GO) run ./examples/api_usage
+
+example-advanced:
+	$(GO) run ./examples/advanced_bot
+
+example-complete:
+	$(GO) run ./examples/complete_api_demo
+
 fmt:
 	$(GO) fmt ./...
 
-# 检查代码
+fmt-check:
+	@files="$$($(GOFMT) -l .)"; \
+	if [ -n "$$files" ]; then \
+		echo "以下 Go 文件需要格式化："; \
+		echo "$$files"; \
+		exit 1; \
+	fi
+
 vet:
 	$(GO) vet ./...
 
-# 静态检查
 lint:
 	golangci-lint run
 
-# 清理构建文件
 clean:
 	rm -rf $(BUILD_DIR)
 
-# 安装到GOPATH
 install:
 	$(GO) install .
 
-# 生成文档
 docs:
 	godoc -http=:6060
 
-# 完整测试（包括格式检查）
-test-full: fmt vet test
+# 发布前的离线检查，不访问 KOOK。
+verify: fmt-check test test-race vet build-all
 
-# 帮助信息
+test-full: verify
+
 help:
-	@echo "可用的命令："
-	@echo "  deps          - 安装依赖"
-	@echo "  test          - 运行测试"
-	@echo "  build         - 构建主程序"
-	@echo "  build-examples - 构建示例程序"
-	@echo "  run           - 运行主程序测试"
-	@echo "  example-simple - 运行简单机器人示例"
-	@echo "  example-webhook - 运行Webhook机器人示例"
-	@echo "  example-api   - 运行API使用示例"
-	@echo "  fmt           - 格式化代码"
-	@echo "  vet           - 检查代码"
-	@echo "  lint          - 静态检查"
-	@echo "  clean         - 清理构建文件"
-	@echo "  install       - 安装到GOPATH"
-	@echo "  docs          - 生成文档服务器"
-	@echo "  test-full     - 完整测试"
-	@echo "  help          - 显示此帮助信息"
+	@echo "可用目标："
+	@echo "  deps              下载依赖，不修改依赖文件"
+	@echo "  tidy              整理 go.mod 和 go.sum"
+	@echo "  test              运行离线测试"
+	@echo "  test-race         运行离线竞态测试"
+	@echo "  test-integration  运行真实 KOOK 只读测试"
+	@echo "  test-mutation     运行真实 KOOK 写入测试"
+	@echo "  test-oauth        运行真实 OAuth 测试"
+	@echo "  build             构建根目录程序到 build/"
+	@echo "  build-all         编译 SDK 和所有示例"
+	@echo "  build-examples    构建 5 个示例到 build/examples/"
+	@echo "  run               运行根目录程序"
+	@echo "  example-*         运行对应示例"
+	@echo "  fmt               格式化 Go 代码"
+	@echo "  fmt-check         检查 Go 代码格式"
+	@echo "  vet               运行 go vet"
+	@echo "  lint              运行 golangci-lint"
+	@echo "  verify            执行发布前离线检查"
+	@echo "  clean             删除 build/"
+	@echo "  install           安装根目录程序"
+	@echo "  docs              在 :6060 启动 godoc"

@@ -1,6 +1,7 @@
 package kook
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,14 +13,18 @@ type ThreadService struct {
 	client *Client
 }
 
-// GetThreadCategories 获取帖子分区列表
-func (s *ThreadService) GetThreadCategories(ctx context.Context, channelID string) (*ThreadCategoryListResponse, error) {
-	if channelID == "" {
+type ThreadCategoryListParams struct {
+	ChannelID string
+}
+
+// GetThreadCategories 获取帖子分区列表。
+func (s *ThreadService) GetThreadCategories(ctx context.Context, params ThreadCategoryListParams) (*ThreadCategoryListResponse, error) {
+	if params.ChannelID == "" {
 		return nil, fmt.Errorf("频道ID不能为空")
 	}
 
 	resp, err := s.client.Get(ctx, "category/list", map[string]string{
-		"channel_id": channelID,
+		"channel_id": params.ChannelID,
 	})
 	if err != nil {
 		return nil, err
@@ -62,7 +67,7 @@ func (s *ThreadService) CreateThread(ctx context.Context, params CreateThreadPar
 }
 
 // ReplyThread 回复帖子
-func (s *ThreadService) ReplyThread(ctx context.Context, params ReplyThreadParams) (*ThreadReply, error) {
+func (s *ThreadService) ReplyThread(ctx context.Context, params ReplyThreadParams) (*Post, error) {
 	if params.ChannelID == "" {
 		return nil, fmt.Errorf("频道ID不能为空")
 	}
@@ -78,7 +83,7 @@ func (s *ThreadService) ReplyThread(ctx context.Context, params ReplyThreadParam
 		return nil, err
 	}
 
-	var result ThreadReply
+	var result Post
 	if err := json.Unmarshal(resp.Data, &result); err != nil {
 		return nil, fmt.Errorf("解析帖子回复结果失败: %w", err)
 	}
@@ -86,18 +91,23 @@ func (s *ThreadService) ReplyThread(ctx context.Context, params ReplyThreadParam
 	return &result, nil
 }
 
-// GetThread 获取帖子详情
-func (s *ThreadService) GetThread(ctx context.Context, channelID, threadID string) (*Thread, error) {
-	if channelID == "" {
+type ThreadViewParams struct {
+	ChannelID string
+	ThreadID  string
+}
+
+// GetThread 获取帖子详情。
+func (s *ThreadService) GetThread(ctx context.Context, params ThreadViewParams) (*Thread, error) {
+	if params.ChannelID == "" {
 		return nil, fmt.Errorf("频道ID不能为空")
 	}
-	if threadID == "" {
+	if params.ThreadID == "" {
 		return nil, fmt.Errorf("帖子ID不能为空")
 	}
 
 	resp, err := s.client.Get(ctx, "thread/view", map[string]string{
-		"channel_id": channelID,
-		"thread_id":  threadID,
+		"channel_id": params.ChannelID,
+		"thread_id":  params.ThreadID,
 	})
 	if err != nil {
 		return nil, err
@@ -130,26 +140,32 @@ func (s *ThreadService) GetThreadList(ctx context.Context, params GetThreadListP
 	return &result, nil
 }
 
-// DeleteThread 删除帖子或帖子回复
-func (s *ThreadService) DeleteThread(ctx context.Context, channelID, threadID, postID string) error {
-	if channelID == "" {
+type ThreadDeleteParams struct {
+	ChannelID string
+	ThreadID  string
+	PostID    string
+}
+
+// DeleteThread 删除帖子或帖子回复。
+func (s *ThreadService) DeleteThread(ctx context.Context, params ThreadDeleteParams) error {
+	if params.ChannelID == "" {
 		return fmt.Errorf("频道ID不能为空")
 	}
-	if threadID == "" && postID == "" {
+	if params.ThreadID == "" && params.PostID == "" {
 		return fmt.Errorf("帖子ID或回复ID不能为空")
 	}
 
-	params := map[string]interface{}{
-		"channel_id": channelID,
+	body := map[string]interface{}{
+		"channel_id": params.ChannelID,
 	}
-	if threadID != "" {
-		params["thread_id"] = threadID
+	if params.ThreadID != "" {
+		body["thread_id"] = params.ThreadID
 	}
-	if postID != "" {
-		params["post_id"] = postID
+	if params.PostID != "" {
+		body["post_id"] = params.PostID
 	}
 
-	_, err := s.client.Post(ctx, "thread/delete", params)
+	_, err := s.client.Post(ctx, "thread/delete", body)
 	return err
 }
 
@@ -161,11 +177,11 @@ func (s *ThreadService) GetThreadPosts(ctx context.Context, params GetThreadPost
 	if params.ThreadID == "" {
 		return nil, fmt.Errorf("帖子ID不能为空")
 	}
-	if params.Order == "" {
-		params.Order = "asc"
+	if params.Order != "asc" && params.Order != "desc" {
+		return nil, fmt.Errorf("order必须为asc或desc")
 	}
 	if params.Page <= 0 {
-		params.Page = 1
+		return nil, fmt.Errorf("page必须大于0")
 	}
 
 	resp, err := s.client.Get(ctx, "thread/post", params.toQuery())
@@ -179,14 +195,6 @@ func (s *ThreadService) GetThreadPosts(ctx context.Context, params GetThreadPost
 	}
 
 	return &result, nil
-}
-
-// GetThreadPost 获取回复列表。保留旧方法名以兼容历史调用。
-func (s *ThreadService) GetThreadPost(ctx context.Context, channelID, threadID string) (*ThreadPostListResponse, error) {
-	return s.GetThreadPosts(ctx, GetThreadPostsParams{
-		ChannelID: channelID,
-		ThreadID:  threadID,
-	})
 }
 
 // CreateThreadParams 发布帖子参数
@@ -237,11 +245,11 @@ func (p ReplyThreadParams) toMap() map[string]interface{} {
 
 // GetThreadListParams 获取帖子列表参数
 type GetThreadListParams struct {
-	ChannelID  string `json:"channel_id"`
-	CategoryID string `json:"category_id,omitempty"`
-	Sort       int    `json:"sort,omitempty"`
-	Time       int64  `json:"time,omitempty"`
-	PageSize   int    `json:"page_size,omitempty"`
+	ChannelID  string
+	CategoryID string
+	Sort       *int
+	Time       *int64
+	PageSize   *int
 }
 
 func (p GetThreadListParams) toQuery() map[string]string {
@@ -249,27 +257,27 @@ func (p GetThreadListParams) toQuery() map[string]string {
 	if p.CategoryID != "" {
 		query["category_id"] = p.CategoryID
 	}
-	if p.Sort > 0 {
-		query["sort"] = strconv.Itoa(p.Sort)
+	if p.Sort != nil {
+		query["sort"] = strconv.Itoa(*p.Sort)
 	}
-	if p.Time > 0 {
-		query["time"] = strconv.FormatInt(p.Time, 10)
+	if p.Time != nil {
+		query["time"] = strconv.FormatInt(*p.Time, 10)
 	}
-	if p.PageSize > 0 {
-		query["page_size"] = strconv.Itoa(p.PageSize)
+	if p.PageSize != nil {
+		query["page_size"] = strconv.Itoa(*p.PageSize)
 	}
 	return query
 }
 
 // GetThreadPostsParams 获取帖子回复列表参数
 type GetThreadPostsParams struct {
-	ChannelID string `json:"channel_id"`
-	ThreadID  string `json:"thread_id"`
-	PostID    string `json:"post_id,omitempty"`
-	Time      string `json:"time,omitempty"`
-	PageSize  int    `json:"page_size,omitempty"`
-	Order     string `json:"order,omitempty"`
-	Page      int    `json:"page,omitempty"`
+	ChannelID string
+	ThreadID  string
+	PostID    string
+	Time      string
+	PageSize  *int
+	Order     string
+	Page      int
 }
 
 func (p GetThreadPostsParams) toQuery() map[string]string {
@@ -285,41 +293,324 @@ func (p GetThreadPostsParams) toQuery() map[string]string {
 	if p.Time != "" {
 		query["time"] = p.Time
 	}
-	if p.PageSize > 0 {
-		query["page_size"] = strconv.Itoa(p.PageSize)
+	if p.PageSize != nil {
+		query["page_size"] = strconv.Itoa(*p.PageSize)
 	}
 	return query
 }
 
 // ThreadCategory 帖子分区
 type ThreadCategory struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	ChannelID string `json:"channel_id"`
+	ID    string                     `json:"id"`
+	Name  string                     `json:"name"`
+	Allow int                        `json:"allow"`
+	Deny  int                        `json:"deny"`
+	Roles []ThreadCategoryPermission `json:"roles"`
+}
+
+func (c *ThreadCategory) UnmarshalJSON(data []byte) error {
+	type categoryAlias ThreadCategory
+	value := struct {
+		*categoryAlias
+		ID    json.RawMessage `json:"id"`
+		Roles json.RawMessage `json:"roles"`
+	}{categoryAlias: (*categoryAlias)(c)}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	if len(value.ID) > 0 {
+		id, err := decodeStringOrNumber(value.ID)
+		if err != nil {
+			return fmt.Errorf("解析thread category id失败: %w", err)
+		}
+		c.ID = id
+	}
+	roles := bytes.TrimSpace(value.Roles)
+	if len(roles) == 0 || bytes.Equal(roles, []byte("null")) {
+		c.Roles = nil
+		return nil
+	}
+	if roles[0] == '{' {
+		var keyed map[string]ThreadCategoryPermission
+		if err := json.Unmarshal(roles, &keyed); err != nil {
+			return fmt.Errorf("解析thread category roles失败: %w", err)
+		}
+		c.Roles = make([]ThreadCategoryPermission, 0, len(keyed))
+		for _, permission := range keyed {
+			c.Roles = append(c.Roles, permission)
+		}
+		return nil
+	}
+	if err := json.Unmarshal(roles, &c.Roles); err != nil {
+		return fmt.Errorf("解析thread category roles失败: %w", err)
+	}
+	return nil
+}
+
+// ThreadCategoryPermission 帖子分区的角色或用户权限。
+type ThreadCategoryPermission struct {
+	Type   string `json:"type"`
+	RoleID int    `json:"role_id"`
+	UserID string `json:"user_id"`
+	Allow  int    `json:"allow"`
+	Deny   int    `json:"deny"`
+}
+
+func (p *ThreadCategoryPermission) UnmarshalJSON(data []byte) error {
+	type permissionAlias ThreadCategoryPermission
+	value := struct {
+		*permissionAlias
+		RoleID json.RawMessage `json:"role_id"`
+		UserID json.RawMessage `json:"user_id"`
+	}{permissionAlias: (*permissionAlias)(p)}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	if len(value.RoleID) > 0 {
+		roleID, err := decodeIntOrString(value.RoleID)
+		if err != nil {
+			return fmt.Errorf("解析thread category role_id失败: %w", err)
+		}
+		p.RoleID = roleID
+	}
+	if len(value.UserID) > 0 {
+		userID, err := decodeStringOrNumber(value.UserID)
+		if err != nil {
+			return fmt.Errorf("解析thread category user_id失败: %w", err)
+		}
+		p.UserID = userID
+	}
+	return nil
+}
+
+// ThreadMedia 帖子媒体。
+type ThreadMedia struct {
+	Type  string `json:"type"`
+	Src   string `json:"src"`
+	Title string `json:"title"`
+}
+
+func (m *ThreadMedia) UnmarshalJSON(data []byte) error {
+	type mediaAlias ThreadMedia
+	value := struct {
+		*mediaAlias
+		Type json.RawMessage `json:"type"`
+	}{mediaAlias: (*mediaAlias)(m)}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	if len(value.Type) > 0 {
+		mediaType, err := decodeStringOrNumber(value.Type)
+		if err != nil {
+			return fmt.Errorf("解析thread media type失败: %w", err)
+		}
+		m.Type = mediaType
+	}
+	return nil
+}
+
+// ChannelPart 帖子内容中引用的频道。
+type ChannelPart struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // Thread 帖子
 type Thread struct {
-	ID         string `json:"id"`
-	PostID     string `json:"post_id"`
-	ChannelID  string `json:"channel_id"`
-	CategoryID string `json:"category_id"`
-	Title      string `json:"title"`
-	Content    string `json:"content"`
-	Cover      string `json:"cover"`
-	User       User   `json:"user"`
-	CreateAt   int64  `json:"create_at"`
-	UpdatedAt  int64  `json:"updated_at"`
+	ID                 string            `json:"id"`
+	Status             int               `json:"status"`
+	Title              string            `json:"title"`
+	Cover              string            `json:"cover"`
+	Category           ThreadCategory    `json:"category"`
+	PostID             string            `json:"post_id"`
+	Medias             []ThreadMedia     `json:"medias"`
+	PreviewContent     string            `json:"preview_content"`
+	User               User              `json:"user"`
+	Tags               []json.RawMessage `json:"tags"`
+	LatestActiveTime   int64             `json:"latest_active_time"`
+	CreateTime         int64             `json:"create_time"`
+	IsUpdated          bool              `json:"is_updated"`
+	ContentDeleted     bool              `json:"content_deleted"`
+	ContentDeletedType int               `json:"content_deleted_type"`
+	CollectNum         int               `json:"collect_num"`
+	PostCount          int               `json:"post_count"`
+	Content            string            `json:"content"`
+	Mention            []string          `json:"mention"`
+	MentionAll         bool              `json:"mention_all"`
+	MentionHere        bool              `json:"mention_here"`
+	MentionPart        []MentionPart     `json:"mention_part"`
+	MentionRolePart    []MentionRolePart `json:"mention_role_part"`
+	ChannelPart        []ChannelPart     `json:"channel_part"`
+	ItemPart           []json.RawMessage `json:"item_part"`
 }
 
-// ThreadReply 帖子回复
-type ThreadReply struct {
-	ID        string `json:"id"`
-	PostID    string `json:"post_id"`
-	Content   string `json:"content"`
-	User      User   `json:"user"`
-	CreateAt  int64  `json:"create_at"`
-	UpdatedAt int64  `json:"updated_at"`
+// UnmarshalJSON 兼容 category 返回完整对象或仅返回分区 ID。
+func (t *Thread) UnmarshalJSON(data []byte) error {
+	type threadAlias Thread
+	value := struct {
+		*threadAlias
+		ID             json.RawMessage `json:"id"`
+		PostID         json.RawMessage `json:"post_id"`
+		Category       json.RawMessage `json:"category"`
+		Mention        json.RawMessage `json:"mention"`
+		IsUpdated      json.RawMessage `json:"is_updated"`
+		ContentDeleted json.RawMessage `json:"content_deleted"`
+		MentionAll     json.RawMessage `json:"mention_all"`
+		MentionHere    json.RawMessage `json:"mention_here"`
+	}{threadAlias: (*threadAlias)(t)}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	stringFields := []struct {
+		raw  json.RawMessage
+		dst  *string
+		name string
+	}{
+		{value.ID, &t.ID, "id"},
+		{value.PostID, &t.PostID, "post_id"},
+	}
+	for _, field := range stringFields {
+		if len(field.raw) == 0 {
+			continue
+		}
+		decoded, err := decodeStringOrNumber(field.raw)
+		if err != nil {
+			return fmt.Errorf("解析thread.%s失败: %w", field.name, err)
+		}
+		*field.dst = decoded
+	}
+	if len(value.Mention) > 0 {
+		mention, err := decodeStringSlice(value.Mention)
+		if err != nil {
+			return fmt.Errorf("解析thread.mention失败: %w", err)
+		}
+		t.Mention = mention
+	}
+	boolFields := []struct {
+		raw  json.RawMessage
+		dst  *bool
+		name string
+	}{
+		{value.IsUpdated, &t.IsUpdated, "is_updated"},
+		{value.ContentDeleted, &t.ContentDeleted, "content_deleted"},
+		{value.MentionAll, &t.MentionAll, "mention_all"},
+		{value.MentionHere, &t.MentionHere, "mention_here"},
+	}
+	for _, field := range boolFields {
+		if len(field.raw) == 0 {
+			continue
+		}
+		decoded, err := decodeBoolOrInt(field.raw)
+		if err != nil {
+			return fmt.Errorf("解析thread.%s失败: %w", field.name, err)
+		}
+		*field.dst = decoded
+	}
+	category := bytes.TrimSpace(value.Category)
+	if len(category) == 0 || bytes.Equal(category, []byte("null")) {
+		return nil
+	}
+	if category[0] == '"' || (category[0] >= '0' && category[0] <= '9') {
+		categoryID, err := decodeStringOrNumber(category)
+		if err != nil {
+			return fmt.Errorf("解析thread.category失败: %w", err)
+		}
+		t.Category.ID = categoryID
+		return nil
+	}
+	if err := json.Unmarshal(category, &t.Category); err != nil {
+		return fmt.Errorf("解析thread.category失败: %w", err)
+	}
+	return nil
+}
+
+// Post 帖子评论、回复或楼中楼。
+type Post struct {
+	ID              string            `json:"id"`
+	CategoryID      string            `json:"category_id"`
+	ThreadID        string            `json:"thread_id"`
+	ReplyID         string            `json:"reply_id"`
+	BelongToPostID  string            `json:"belong_to_post_id"`
+	Content         string            `json:"content"`
+	Status          int               `json:"status"`
+	Mention         []string          `json:"mention"`
+	MentionAll      bool              `json:"mention_all"`
+	MentionHere     bool              `json:"mention_here"`
+	MentionPart     []MentionPart     `json:"mention_part"`
+	MentionRolePart []MentionRolePart `json:"mention_role_part"`
+	ChannelPart     []ChannelPart     `json:"channel_part"`
+	ItemPart        []json.RawMessage `json:"item_part"`
+	CreateTime      int64             `json:"create_time"`
+	IsUpdated       bool              `json:"is_updated"`
+	User            User              `json:"user"`
+	Replies         []Post            `json:"replies"`
+}
+
+func (p *Post) UnmarshalJSON(data []byte) error {
+	type postAlias Post
+	value := struct {
+		*postAlias
+		ID             json.RawMessage `json:"id"`
+		CategoryID     json.RawMessage `json:"category_id"`
+		ThreadID       json.RawMessage `json:"thread_id"`
+		ReplyID        json.RawMessage `json:"reply_id"`
+		BelongToPostID json.RawMessage `json:"belong_to_post_id"`
+		Mention        json.RawMessage `json:"mention"`
+		MentionAll     json.RawMessage `json:"mention_all"`
+		MentionHere    json.RawMessage `json:"mention_here"`
+		IsUpdated      json.RawMessage `json:"is_updated"`
+	}{postAlias: (*postAlias)(p)}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	stringFields := []struct {
+		raw  json.RawMessage
+		dst  *string
+		name string
+	}{
+		{value.ID, &p.ID, "id"},
+		{value.CategoryID, &p.CategoryID, "category_id"},
+		{value.ThreadID, &p.ThreadID, "thread_id"},
+		{value.ReplyID, &p.ReplyID, "reply_id"},
+		{value.BelongToPostID, &p.BelongToPostID, "belong_to_post_id"},
+	}
+	for _, field := range stringFields {
+		if len(field.raw) == 0 {
+			continue
+		}
+		decoded, err := decodeStringOrNumber(field.raw)
+		if err != nil {
+			return fmt.Errorf("解析post.%s失败: %w", field.name, err)
+		}
+		*field.dst = decoded
+	}
+	if len(value.Mention) > 0 {
+		mention, err := decodeStringSlice(value.Mention)
+		if err != nil {
+			return fmt.Errorf("解析post.mention失败: %w", err)
+		}
+		p.Mention = mention
+	}
+	boolFields := []struct {
+		raw  json.RawMessage
+		dst  *bool
+		name string
+	}{
+		{value.MentionAll, &p.MentionAll, "mention_all"},
+		{value.MentionHere, &p.MentionHere, "mention_here"},
+		{value.IsUpdated, &p.IsUpdated, "is_updated"},
+	}
+	for _, field := range boolFields {
+		if len(field.raw) == 0 {
+			continue
+		}
+		decoded, err := decodeBoolOrInt(field.raw)
+		if err != nil {
+			return fmt.Errorf("解析post.%s失败: %w", field.name, err)
+		}
+		*field.dst = decoded
+	}
+	return nil
 }
 
 // ThreadCategoryListResponse 帖子分区列表响应
@@ -331,11 +622,11 @@ type ThreadCategoryListResponse struct {
 type ThreadListResponse struct {
 	Items []Thread       `json:"items"`
 	Meta  PaginationMeta `json:"meta"`
-	Sort  map[string]int `json:"sort"`
+	Sort  SortFields     `json:"sort"`
 }
 
 // ThreadPostListResponse 帖子回复列表响应
 type ThreadPostListResponse struct {
-	Items []ThreadReply  `json:"items"`
+	Items []Post         `json:"items"`
 	Meta  PaginationMeta `json:"meta"`
 }

@@ -22,7 +22,10 @@ func (s *FriendService) SendFriendRequest(ctx context.Context, params SendFriend
 		"from":      params.From,
 	}
 
-	if params.From == 2 && params.GuildID != "" {
+	if params.From == FriendRequestFromGuild {
+		if params.GuildID == "" {
+			return fmt.Errorf("从服务器发送好友申请时guild_id不能为空")
+		}
 		requestParams["guild_id"] = params.GuildID
 	}
 
@@ -30,16 +33,15 @@ func (s *FriendService) SendFriendRequest(ctx context.Context, params SendFriend
 	return err
 }
 
-// GetFriendsList 获取好友列表
-func (s *FriendService) GetFriendsList(ctx context.Context) (*FriendsListResponse, error) {
-	return s.GetFriendsListByType(ctx, "")
+type FriendListParams struct {
+	Type string
 }
 
-// GetFriendsListByType 获取指定类型的好友列表
-func (s *FriendService) GetFriendsListByType(ctx context.Context, friendType string) (*FriendsListResponse, error) {
+// GetFriendsList 获取好友、申请与屏蔽列表。
+func (s *FriendService) GetFriendsList(ctx context.Context, params FriendListParams) (*FriendsListResponse, error) {
 	var query map[string]string
-	if friendType != "" {
-		query = map[string]string{"type": friendType}
+	if params.Type != "" {
+		query = map[string]string{"type": params.Type}
 	}
 
 	resp, err := s.client.Get(ctx, "friend", query)
@@ -55,102 +57,79 @@ func (s *FriendService) GetFriendsListByType(ctx context.Context, friendType str
 	return &result, nil
 }
 
-// DeleteFriend 删除好友
-func (s *FriendService) DeleteFriend(ctx context.Context, userID string) error {
-	if userID == "" {
+type DeleteFriendParams struct {
+	UserID string
+}
+
+// DeleteFriend 删除好友。
+func (s *FriendService) DeleteFriend(ctx context.Context, params DeleteFriendParams) error {
+	if params.UserID == "" {
 		return fmt.Errorf("用户ID不能为空")
 	}
 
-	params := map[string]interface{}{
-		"user_id": userID,
+	body := map[string]interface{}{
+		"user_id": params.UserID,
 	}
 
-	_, err := s.client.Post(ctx, "friend/delete", params)
+	_, err := s.client.Post(ctx, "friend/delete", body)
 	return err
 }
 
-// HandleFriendRequest 处理好友请求
-func (s *FriendService) HandleFriendRequest(ctx context.Context, requestID string, accept bool) error {
-	if requestID == "" {
-		return fmt.Errorf("请求ID不能为空")
+type HandleFriendRequestParams struct {
+	ID     int
+	Accept bool
+}
+
+// HandleFriendRequest 处理好友请求。
+func (s *FriendService) HandleFriendRequest(ctx context.Context, params HandleFriendRequestParams) (bool, error) {
+	if params.ID <= 0 {
+		return false, fmt.Errorf("请求ID不能为空")
 	}
 
-	params := map[string]interface{}{
-		"id":     requestID,
-		"accept": accept,
+	body := map[string]interface{}{
+		"id":     params.ID,
+		"accept": params.Accept,
 	}
 
-	_, err := s.client.Post(ctx, "friend/handle-request", params)
-	return err
-}
-
-// AcceptFriendRequest 接受好友请求
-func (s *FriendService) AcceptFriendRequest(ctx context.Context, requestID string) error {
-	return s.HandleFriendRequest(ctx, requestID, true)
-}
-
-// RejectFriendRequest 拒绝好友请求
-func (s *FriendService) RejectFriendRequest(ctx context.Context, requestID string) error {
-	return s.HandleFriendRequest(ctx, requestID, false)
-}
-
-// CreateRelation 发起好友亲密关系请求
-func (s *FriendService) CreateRelation(ctx context.Context, userID string) error {
-	if userID == "" {
-		return fmt.Errorf("用户ID不能为空")
+	resp, err := s.client.Post(ctx, "friend/handle-request", body)
+	if err != nil {
+		return false, err
 	}
-
-	_, err := s.client.Post(ctx, "friend/create-relation", map[string]interface{}{
-		"user_id": userID,
-	})
-	return err
-}
-
-// HandleRelation 处理好友亲密关系请求
-func (s *FriendService) HandleRelation(ctx context.Context, requestID string, accept bool) error {
-	if requestID == "" {
-		return fmt.Errorf("请求ID不能为空")
+	var accepted bool
+	if err := json.Unmarshal(resp.Data, &accepted); err != nil {
+		return false, fmt.Errorf("解析好友申请处理结果失败: %w", err)
 	}
-
-	_, err := s.client.Post(ctx, "friend/handle-relation", map[string]interface{}{
-		"id":     requestID,
-		"accept": accept,
-	})
-	return err
+	return accepted, nil
 }
 
-// UnravelRelation 解除好友亲密关系
-func (s *FriendService) UnravelRelation(ctx context.Context, userID string) error {
-	if userID == "" {
-		return fmt.Errorf("用户ID不能为空")
-	}
-
-	_, err := s.client.Post(ctx, "friend/unravel-relation", map[string]interface{}{
-		"user_id": userID,
-	})
-	return err
+type BlockFriendParams struct {
+	UserID string
 }
 
-// BlockFriend 屏蔽好友
-func (s *FriendService) BlockFriend(ctx context.Context, userID string) error {
-	if userID == "" {
+// BlockFriend 屏蔽用户。
+func (s *FriendService) BlockFriend(ctx context.Context, params BlockFriendParams) error {
+	if params.UserID == "" {
 		return fmt.Errorf("用户ID不能为空")
 	}
 
 	_, err := s.client.Post(ctx, "friend/block", map[string]interface{}{
-		"user_id": userID,
+		"user_id": params.UserID,
 	})
 	return err
 }
 
-// UnblockFriend 取消屏蔽好友
-func (s *FriendService) UnblockFriend(ctx context.Context, userID string) error {
-	if userID == "" {
+type UnblockFriendParams struct {
+	UserID string
+}
+
+// UnblockFriend 取消屏蔽用户。
+func (s *FriendService) UnblockFriend(ctx context.Context, params UnblockFriendParams) error {
+	if params.UserID == "" {
 		return fmt.Errorf("用户ID不能为空")
 	}
 
 	_, err := s.client.Post(ctx, "friend/unblock", map[string]interface{}{
-		"user_id": userID,
+		"user_id": params.UserID,
 	})
 	return err
 }
@@ -164,21 +143,37 @@ type SendFriendRequestParams struct {
 	GuildID  string `json:"guild_id,omitempty"` // 服务器ID（当from=2时必填）
 }
 
-// FriendRequest 好友请求信息
-type FriendRequest struct {
-	ID      string `json:"id"`      // 请求ID
-	UserID  string `json:"user_id"` // 用户ID
-	User    User   `json:"user"`    // 用户信息
-	Status  int    `json:"status"`  // 请求状态
-	Time    int64  `json:"time"`    // 请求时间
-	Message string `json:"message"` // 请求消息
+// FriendRelation 是好友、好友申请或屏蔽列表中的关系项。
+type FriendRelation struct {
+	ID         int    `json:"id"`
+	Type       string `json:"type"`
+	FriendInfo User   `json:"friend_info"`
+	Own        bool   `json:"own"`
 }
 
 // FriendsListResponse 好友列表响应
 type FriendsListResponse struct {
-	Request []FriendRequest `json:"request"` // 好友请求列表
-	Friend  []User          `json:"friend"`  // 好友列表
-	Blocked []User          `json:"blocked"` // 被屏蔽用户列表
+	Request []FriendRelation `json:"request"`
+	Friend  []FriendRelation `json:"friend"`
+	Block   []FriendRelation `json:"block"`
+	Blocked []FriendRelation `json:"blocked"`
+}
+
+// UnmarshalJSON 兼容官方字段表中的 block 和实际示例中的 blocked。
+func (r *FriendsListResponse) UnmarshalJSON(data []byte) error {
+	type responseAlias FriendsListResponse
+	var value responseAlias
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	if value.Block == nil {
+		value.Block = value.Blocked
+	}
+	if value.Blocked == nil {
+		value.Blocked = value.Block
+	}
+	*r = FriendsListResponse(value)
+	return nil
 }
 
 // 好友请求来源常量

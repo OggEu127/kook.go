@@ -114,7 +114,9 @@ func (e *KOOKError) IsNotFoundError() bool {
 
 // IsServerError 判断是否为服务器错误
 func (e *KOOKError) IsServerError() bool {
-	return e.Code >= 500 || e.HTTPStatus >= 500
+	return (e.Code >= 50000 && e.Code < 60000) ||
+		(e.Code >= 500 && e.Code < 600) ||
+		e.HTTPStatus >= 500
 }
 
 // WithContext 添加错误上下文
@@ -239,18 +241,6 @@ func IsValidationError(err error) (*ValidationError, bool) {
 	var validationErr *ValidationError
 	if errors.As(err, &validationErr) {
 		return validationErr, true
-	}
-	return nil, false
-}
-
-// 为了保持向后兼容，保留原有的 APIError 类型
-type APIError = KOOKError
-
-// IsAPIError 检查是否为 API 错误（向后兼容）
-func IsAPIError(err error) (*APIError, bool) {
-	if kookErr, ok := IsKOOKError(err); ok {
-		// KOOKError 和 APIError 是同一个类型（别名），所以可以直接返回
-		return kookErr, true
 	}
 	return nil, false
 }

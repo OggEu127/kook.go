@@ -19,6 +19,7 @@ func main() {
 
 	// 创建客户端
 	client := kook.NewClient(token)
+	defer client.Close()
 
 	// 获取机器人信息
 	user, err := client.User.GetMe(context.Background())
@@ -33,7 +34,10 @@ func main() {
 	log.Printf("是否为机器人: %v", user.Bot)
 
 	// 获取服务器列表
-	guilds, err := client.Guild.GetGuildList(context.Background(), 1, 5, "")
+	page, pageSize := 1, 5
+	guilds, err := client.Guild.GetGuildList(context.Background(), kook.GuildListParams{
+		Page: &page, PageSize: &pageSize,
+	})
 	if err != nil {
 		log.Printf("获取服务器列表失败: %v", err)
 	} else {
@@ -46,5 +50,5 @@ func main() {
 
 	log.Println("\nSDK 功能测试完成！")
 	log.Println("查看 examples/ 目录了解更多用法")
-	log.Println("查看 docs/api.md 了解完整API文档")
+	log.Println("查看 DETAILED_GUIDE.md 了解完整 API")
 }

@@ -12,14 +12,19 @@ type UserChatService struct {
 	client *Client
 }
 
-// GetUserChatList 获取私信聊天会话列表
-func (s *UserChatService) GetUserChatList(ctx context.Context, page, pageSize int) (*UserChatListResponse, error) {
+type UserChatListParams struct {
+	Page     *int
+	PageSize *int
+}
+
+// GetUserChatList 获取私信聊天会话列表。
+func (s *UserChatService) GetUserChatList(ctx context.Context, params UserChatListParams) (*UserChatListResponse, error) {
 	query := make(map[string]string)
-	if page > 0 {
-		query["page"] = strconv.Itoa(page)
+	if params.Page != nil {
+		query["page"] = strconv.Itoa(*params.Page)
 	}
-	if pageSize > 0 {
-		query["page_size"] = strconv.Itoa(pageSize)
+	if params.PageSize != nil {
+		query["page_size"] = strconv.Itoa(*params.PageSize)
 	}
 
 	resp, err := s.client.Get(ctx, "user-chat/list", query)
@@ -35,14 +40,18 @@ func (s *UserChatService) GetUserChatList(ctx context.Context, page, pageSize in
 	return &result, nil
 }
 
-// GetUserChat 获取私信聊天会话详情
-func (s *UserChatService) GetUserChat(ctx context.Context, chatCode string) (*UserChat, error) {
-	if chatCode == "" {
+type UserChatViewParams struct {
+	ChatCode string
+}
+
+// GetUserChat 获取私信聊天会话详情。
+func (s *UserChatService) GetUserChat(ctx context.Context, params UserChatViewParams) (*UserChat, error) {
+	if params.ChatCode == "" {
 		return nil, fmt.Errorf("私信会话Code不能为空")
 	}
 
 	resp, err := s.client.Get(ctx, "user-chat/view", map[string]string{
-		"chat_code": chatCode,
+		"chat_code": params.ChatCode,
 	})
 	if err != nil {
 		return nil, err
@@ -56,14 +65,18 @@ func (s *UserChatService) GetUserChat(ctx context.Context, chatCode string) (*Us
 	return &result, nil
 }
 
-// CreateUserChat 创建私信聊天会话
-func (s *UserChatService) CreateUserChat(ctx context.Context, targetID string) (*UserChat, error) {
-	if targetID == "" {
+type UserChatCreateParams struct {
+	TargetID string
+}
+
+// CreateUserChat 创建私信聊天会话。
+func (s *UserChatService) CreateUserChat(ctx context.Context, params UserChatCreateParams) (*UserChat, error) {
+	if params.TargetID == "" {
 		return nil, fmt.Errorf("目标用户ID不能为空")
 	}
 
 	resp, err := s.client.Post(ctx, "user-chat/create", map[string]interface{}{
-		"target_id": targetID,
+		"target_id": params.TargetID,
 	})
 	if err != nil {
 		return nil, err
@@ -77,14 +90,18 @@ func (s *UserChatService) CreateUserChat(ctx context.Context, targetID string) (
 	return &result, nil
 }
 
-// DeleteUserChat 删除私信聊天会话
-func (s *UserChatService) DeleteUserChat(ctx context.Context, chatCode string) error {
-	if chatCode == "" {
+type UserChatDeleteParams struct {
+	ChatCode string
+}
+
+// DeleteUserChat 删除私信聊天会话。
+func (s *UserChatService) DeleteUserChat(ctx context.Context, params UserChatDeleteParams) error {
+	if params.ChatCode == "" {
 		return fmt.Errorf("私信会话Code不能为空")
 	}
 
 	_, err := s.client.Post(ctx, "user-chat/delete", map[string]interface{}{
-		"chat_code": chatCode,
+		"chat_code": params.ChatCode,
 	})
 	return err
 }
@@ -105,5 +122,5 @@ type UserChat struct {
 type UserChatListResponse struct {
 	Items []UserChat     `json:"items"`
 	Meta  PaginationMeta `json:"meta"`
-	Sort  map[string]int `json:"sort"`
+	Sort  SortFields     `json:"sort"`
 }

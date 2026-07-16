@@ -17,6 +17,7 @@ func main() {
 
 	// 创建客户端
 	client := kook.NewClient(token)
+	defer client.Close()
 
 	// 演示用户API
 	demonstrateUserAPI(client)
@@ -47,7 +48,10 @@ func demonstrateGuildAPI(client *kook.Client) {
 	log.Println("=== 服务器API演示 ===")
 
 	// 获取服务器列表
-	guilds, err := client.Guild.GetGuildList(context.Background(), 1, 10, "")
+	page, pageSize := 1, 10
+	guilds, err := client.Guild.GetGuildList(context.Background(), kook.GuildListParams{
+		Page: &page, PageSize: &pageSize,
+	})
 	if err != nil {
 		log.Printf("获取服务器列表失败: %v", err)
 		return
@@ -58,7 +62,10 @@ func demonstrateGuildAPI(client *kook.Client) {
 		log.Printf("服务器: %s (ID: %s)", guild.Name, guild.ID)
 
 		// 获取服务器成员列表
-		members, err := client.Guild.GetGuildMembers(context.Background(), guild.ID, 1, 5, "")
+		memberPageSize := 5
+		members, err := client.Guild.GetGuildMembers(context.Background(), kook.GuildMembersParams{
+			GuildID: guild.ID, Page: &page, PageSize: &memberPageSize,
+		})
 		if err != nil {
 			log.Printf("获取服务器成员失败: %v", err)
 			continue
@@ -84,26 +91,29 @@ func demonstrateMessageAPI(client *kook.Client) {
 	}
 
 	// 发送消息
-	params := kook.SendMessageParams{
+	messageType := kook.MessageTypeText
+	params := kook.MessageCreateParams{
 		TargetID: channelID,
 		Content:  "Hello from KOOK Go SDK! 🚀",
-		MsgType:  1,
+		Type:     &messageType,
 	}
 
-	message, err := client.Message.SendMessage(context.Background(), params)
+	message, err := client.Message.Create(context.Background(), params)
 	if err != nil {
 		log.Printf("发送消息失败: %v", err)
 		return
 	}
 
-	log.Printf("消息发送成功: %s", message.ID)
+	log.Printf("消息发送成功: %s", message.MsgID)
 
 	// 获取消息列表
-	listParams := kook.GetMessageListParams{
-		PageSize: 10,
+	listPageSize := 10
+	listParams := kook.MessageListParams{
+		TargetID: channelID,
+		PageSize: &listPageSize,
 	}
 
-	messages, err := client.Message.GetMessageList(context.Background(), channelID, listParams)
+	messages, err := client.Message.GetMessageList(context.Background(), listParams)
 	if err != nil {
 		log.Printf("获取消息列表失败: %v", err)
 		return

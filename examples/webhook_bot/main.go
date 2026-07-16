@@ -19,6 +19,7 @@ func main() {
 
 	// 创建客户端
 	client := kook.NewClient(token)
+	defer client.Close()
 
 	// 获取机器人信息
 	user, err := client.User.GetMe(context.Background())
@@ -32,19 +33,25 @@ func main() {
 	webhook := kook.NewWebhookHandler(client, "", verifyToken)
 
 	// 注册消息事件处理器
-	webhook.OnEvent(kook.EventTypeTextMessage, func(event *kook.Event) {
-		log.Printf("收到消息: %s", event.Content)
+	webhook.OnMessage(kook.MessageTypeText, func(event *kook.MessageEvent) {
+		content, err := event.TextContent()
+		if err != nil {
+			log.Printf("解析消息失败: %v", err)
+			return
+		}
+		log.Printf("收到消息: %s", content)
 
 		// 简单的回复逻辑
-		if event.Content == "hello" {
+		if content == "hello" {
 			// 发送回复消息
-			params := kook.SendMessageParams{
+			messageType := kook.MessageTypeText
+			params := kook.MessageCreateParams{
 				TargetID: event.TargetID,
 				Content:  "Hello! 我是KOOK机器人 🤖",
-				MsgType:  1,
+				Type:     &messageType,
 			}
 
-			_, err := client.Message.SendMessage(context.Background(), params)
+			_, err := client.Message.Create(context.Background(), params)
 			if err != nil {
 				log.Printf("发送消息失败: %v", err)
 			}
