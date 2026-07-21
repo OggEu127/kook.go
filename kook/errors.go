@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"time"
 )
 
@@ -41,6 +40,15 @@ var ErrorCodeMap = map[ErrorCode]string{
 	ErrorCodeServiceUnavailable:  "服务不可用",
 	ErrorCodeGatewayTimeout:      "网关超时",
 }
+
+var (
+	// ErrClientClosed 表示客户端已经关闭，不能再发起新请求。
+	ErrClientClosed = errors.New("KOOK客户端已关闭")
+	// ErrRateLimiterClosed 表示限流器已经关闭。
+	ErrRateLimiterClosed = errors.New("KOOK限流器已关闭")
+	// ErrUnsupportedEndpoint 表示旧版公开API对应的端点已不在官方接口清单中。
+	ErrUnsupportedEndpoint = errors.New("KOOK端点不受支持")
+)
 
 // KOOKError KOOK API 错误
 type KOOKError struct {
@@ -156,6 +164,9 @@ type ValidationError struct {
 	Value   string `json:"value,omitempty"`
 }
 
+// APIError 是 KOOKError 的 v1.1.1 兼容别名。
+type APIError = KOOKError
+
 // Error 实现 error 接口
 func (e *ValidationError) Error() string {
 	if e.Value != "" {
@@ -201,10 +212,8 @@ func NewKOOKErrorFromResponse(resp *http.Response, body []byte) *KOOKError {
 	}
 
 	// 提取重试延迟
-	if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
-		if seconds, parseErr := strconv.Atoi(retryAfter); parseErr == nil {
-			err.RetryAfter = time.Duration(seconds) * time.Second
-		}
+	if retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()); retryAfter > 0 {
+		err.RetryAfter = retryAfter
 	}
 
 	return err
@@ -244,3 +253,6 @@ func IsValidationError(err error) (*ValidationError, bool) {
 	}
 	return nil, false
 }
+
+// IsAPIError 是 IsKOOKError 的 v1.1.1 兼容别名。
+func IsAPIError(err error) (*APIError, bool) { return IsKOOKError(err) }

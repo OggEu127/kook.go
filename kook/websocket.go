@@ -48,6 +48,15 @@ var ErrEventBufferFull = errors.New("WebSocket事件缓冲区已满")
 // ErrEventDispatchQueueFull 表示业务处理器持续过慢，有界派发队列已满。
 var ErrEventDispatchQueueFull = errors.New("WebSocket事件派发队列已满")
 
+// ErrEventSequenceGap 表示事件序列缺口在TTL内没有补齐，需要重连重放。
+var ErrEventSequenceGap = errors.New("WebSocket事件序列存在缺口")
+
+type queuedWebSocketEvent struct {
+	event      *Event
+	ordered    bool
+	generation uint64
+}
+
 type bufferedEvent struct {
 	msg     *WebSocketMessage
 	created time.Time
@@ -58,12 +67,14 @@ type WebSocketClient struct {
 	client          *Client
 	conn            *websocket.Conn
 	dispatcher      *eventDispatcher
-	dispatchQueue   chan *Event
+	dispatchQueue   chan queuedWebSocketEvent
 	ctx             context.Context
 	cancel          context.CancelFunc
 	compress        bool
 	sn              int
+	receivedSN      int
 	sessionID       string
+	generation      uint64
 	stateMu         sync.RWMutex
 	reconnecting    bool
 	heartbeatTicker *time.Ticker
@@ -81,6 +92,12 @@ type WebSocketClient struct {
 	pendingPing     bool
 	pendingPingMu   sync.Mutex
 	eventBuffer     map[int]bufferedEvent
+	configErr       error
+	connectMu       sync.Mutex
+	connecting      bool
+	closeOnce       sync.Once
+	gapTimerMu      sync.Mutex
+	gapTimer        *time.Timer
 }
 
 // WebSocketMessage WebSocket消息结构
@@ -125,16 +142,29 @@ const (
 
 // NewWebSocketClient 创建新的WebSocket客户端
 func NewWebSocketClient(client *Client, compress bool, options ...WebSocketOptions) *WebSocketClient {
+	ws, err := newWebSocketClient(client, compress, options...)
+	if err != nil {
+		ws.configErr = err
+		ws.cancel()
+	}
+	return ws
+}
+
+// NewWebSocketClientWithError 创建经过完整配置校验的WebSocket客户端。
+func NewWebSocketClientWithError(client *Client, compress bool, options ...WebSocketOptions) (*WebSocketClient, error) {
+	ws, err := newWebSocketClient(client, compress, options...)
+	if err != nil {
+		return nil, err
+	}
+	return ws, nil
+}
+
+func newWebSocketClient(client *Client, compress bool, options ...WebSocketOptions) (*WebSocketClient, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	wsOptions := DefaultWebSocketOptions()
-	if len(options) > 0 {
-		wsOptions = mergeWebSocketOptions(wsOptions, options[0])
-	}
-
 	ws := &WebSocketClient{
 		client:         client,
 		dispatcher:     newEventDispatcher(),
-		dispatchQueue:  make(chan *Event, wsOptions.DispatchQueueSize),
 		ctx:            ctx,
 		cancel:         cancel,
 		compress:       compress,
@@ -143,8 +173,35 @@ func NewWebSocketClient(client *Client, compress bool, options ...WebSocketOptio
 		options:        wsOptions,
 		eventBuffer:    make(map[int]bufferedEvent),
 	}
+	if len(options) > 1 {
+		cancel()
+		return ws, fmt.Errorf("只能提供一组WebSocket配置")
+	}
+	if len(options) > 0 {
+		wsOptions = mergeWebSocketOptions(wsOptions, options[0])
+		ws.options = wsOptions
+	}
+	if client == nil || client.logger == nil || client.closed.Load() {
+		cancel()
+		return ws, fmt.Errorf("WebSocket客户端不能为空")
+	}
+	if err := validateWebSocketOptions(wsOptions); err != nil {
+		cancel()
+		return ws, err
+	}
+	ws.dispatchQueue = make(chan queuedWebSocketEvent, wsOptions.DispatchQueueSize)
 	go ws.runEventDispatcher()
-	return ws
+	return ws, nil
+}
+
+func validateWebSocketOptions(options WebSocketOptions) error {
+	if options.ReadLimit <= 0 || options.ReadTimeout <= 0 || options.HelloTimeout <= 0 || options.PongTimeout <= 0 {
+		return fmt.Errorf("WebSocket读取和超时配置必须大于0")
+	}
+	if options.MaxEventBuffer <= 0 || options.EventBufferTTL <= 0 || options.DispatchQueueSize <= 0 {
+		return fmt.Errorf("WebSocket缓冲区配置必须大于0")
+	}
+	return nil
 }
 
 func mergeWebSocketOptions(defaults, override WebSocketOptions) WebSocketOptions {
@@ -166,7 +223,7 @@ func mergeWebSocketOptions(defaults, override WebSocketOptions) WebSocketOptions
 	if override.EventBufferTTL != 0 {
 		defaults.EventBufferTTL = override.EventBufferTTL
 	}
-	if override.DispatchQueueSize > 0 {
+	if override.DispatchQueueSize != 0 {
 		defaults.DispatchQueueSize = override.DispatchQueueSize
 	}
 	return defaults
@@ -187,8 +244,53 @@ func (ws *WebSocketClient) OnAnyEvent(handler RawEventHandler) {
 	ws.dispatcher.onAnyEvent(handler)
 }
 
+// OnEvent 保留 v1.1.1 的数字事件注册方式。
+func (ws *WebSocketClient) OnEvent(eventType int, handler EventHandler) {
+	if handler == nil {
+		return
+	}
+	ws.OnAnyEvent(func(event *Event) {
+		if int(event.Type) == eventType {
+			handler(event)
+		}
+	})
+}
+
 // Connect 连接到WebSocket网关
 func (ws *WebSocketClient) Connect() error {
+	if ws == nil {
+		return fmt.Errorf("WebSocket客户端不能为空")
+	}
+	if ws.configErr != nil {
+		return ws.configErr
+	}
+	ws.connectMu.Lock()
+	if ws.IsConnected() {
+		ws.connectMu.Unlock()
+		return nil
+	}
+	if ws.connecting {
+		ws.connectMu.Unlock()
+		return fmt.Errorf("WebSocket正在连接")
+	}
+	ws.stateMu.RLock()
+	reconnecting := ws.reconnecting
+	ws.stateMu.RUnlock()
+	if reconnecting {
+		ws.connectMu.Unlock()
+		return fmt.Errorf("WebSocket正在重连")
+	}
+	if ws.ctx.Err() != nil {
+		ws.connectMu.Unlock()
+		return ws.ctx.Err()
+	}
+	ws.connecting = true
+	ws.connectMu.Unlock()
+	defer func() {
+		ws.connectMu.Lock()
+		ws.connecting = false
+		ws.connectMu.Unlock()
+	}()
 	return ws.connectWithRetry()
 }
 
@@ -201,7 +303,7 @@ func (ws *WebSocketClient) connectWithRetry() error {
 			return nil
 		}
 
-		ws.client.logger.WithError(err).Errorf("WebSocket连接失败，尝试 %d/%d", attempts+1, ws.maxReconnects+1)
+		ws.client.logger.Errorf("WebSocket连接失败，尝试 %d/%d", attempts+1, ws.maxReconnects+1)
 
 		if attempts < ws.maxReconnects {
 			select {
@@ -237,7 +339,7 @@ func (ws *WebSocketClient) doConnect() error {
 	header := http.Header{}
 	header.Set("Authorization", fmt.Sprintf("%s %s", ws.client.tokenType, ws.client.token))
 
-	ws.client.logger.Infof("连接到WebSocket网关: %s", connectURL)
+	ws.client.logger.Infof("连接到WebSocket网关: %s", sanitizedURL(connectURL))
 
 	dialCtx := ws.ctx
 	var cancel context.CancelFunc
@@ -256,14 +358,20 @@ func (ws *WebSocketClient) doConnect() error {
 	}
 
 	ws.connMu.Lock()
+	if ws.ctx.Err() != nil {
+		ws.connMu.Unlock()
+		_ = conn.Close()
+		return ws.ctx.Err()
+	}
 	ws.conn = conn
 	ws.isConnected = true
 	ws.connMu.Unlock()
+	ws.activateConnectionGeneration()
 
 	ws.client.logger.Info("WebSocket连接成功")
 
 	// 启动消息处理协程
-	go ws.handleMessages()
+	go ws.handleMessages(conn)
 
 	return nil
 }
@@ -287,24 +395,24 @@ func (ws *WebSocketClient) waitHello(conn *websocket.Conn) error {
 		}
 		return fmt.Errorf("读取Hello消息失败: %w", err)
 	}
-	if msg.S != SignalHello {
-		return fmt.Errorf("首个WebSocket消息信令=%d，期望Hello信令", msg.S)
-	}
-	if err := ws.handleHello(msg); err != nil {
-		return err
+	switch msg.S {
+	case SignalHello:
+		if err := ws.handleHello(msg); err != nil {
+			return err
+		}
+	case SignalResumeAck:
+		if ws.getSessionID() == "" {
+			return fmt.Errorf("收到ResumeAck但本地会话为空")
+		}
+		if err := ws.handleResumeAck(msg); err != nil {
+			return err
+		}
+		ws.startHeartbeat()
+	default:
+		return fmt.Errorf("首个WebSocket消息信令=%d，期望Hello或ResumeAck信令", msg.S)
 	}
 	ws.refreshReadDeadline(conn)
 	return nil
-}
-
-func (ws *WebSocketClient) configureRead(conn *websocket.Conn) {
-	if conn == nil {
-		return
-	}
-	if ws.options.ReadLimit > 0 {
-		conn.SetReadLimit(ws.options.ReadLimit)
-	}
-	ws.refreshReadDeadline(conn)
 }
 
 func (ws *WebSocketClient) refreshReadDeadline(conn *websocket.Conn) {
@@ -326,7 +434,7 @@ func (ws *WebSocketClient) resumeGatewayURL() string {
 
 	u, err := url.Parse(gatewayURL)
 	if err != nil {
-		ws.client.logger.WithError(err).Warn("解析WebSocket resume URL失败，将重新获取gateway")
+		ws.client.logger.Warn("解析WebSocket resume URL失败，将重新获取gateway")
 		return ""
 	}
 
@@ -340,33 +448,37 @@ func (ws *WebSocketClient) resumeGatewayURL() string {
 
 // Close 关闭WebSocket连接
 func (ws *WebSocketClient) Close() error {
-	ws.cancel()
-	ws.stopHeartbeat()
-	ws.clearPendingPing()
-
-	ws.connMu.RLock()
-	conn := ws.conn
-	ws.connMu.RUnlock()
-
-	if conn != nil {
-		return conn.Close()
+	if ws == nil {
+		return nil
 	}
-
-	return nil
+	var closeErr error
+	ws.closeOnce.Do(func() {
+		ws.cancel()
+		ws.stopHeartbeat()
+		ws.stopGapTimer()
+		ws.clearPendingPing()
+		closeErr = ws.closeActiveConnection()
+	})
+	return closeErr
 }
 
 // handleMessages 处理WebSocket消息
-func (ws *WebSocketClient) handleMessages() {
+func (ws *WebSocketClient) handleMessages(conn *websocket.Conn) {
 	defer func() {
+		ws.markReconnectPending()
 		ws.stopHeartbeat()
+		ws.stopGapTimer()
 		if r := recover(); r != nil {
-			ws.client.logger.Errorf("WebSocket消息处理发生panic: %v", r)
+			ws.client.logger.Error("WebSocket消息处理发生panic")
 		}
 
-		// 标记连接已断开
 		ws.connMu.Lock()
-		ws.isConnected = false
+		if ws.conn == conn {
+			ws.conn = nil
+			ws.isConnected = false
+		}
 		ws.connMu.Unlock()
+		_ = conn.Close()
 
 		// 主动关闭时不重连
 		if ws.ctx.Err() == nil {
@@ -379,24 +491,16 @@ func (ws *WebSocketClient) handleMessages() {
 		case <-ws.ctx.Done():
 			return
 		default:
-			ws.connMu.RLock()
-			conn := ws.conn
-			ws.connMu.RUnlock()
-
-			if conn == nil {
-				ws.client.logger.Error("WebSocket连接为空")
-				return
-			}
-
 			msg, err := ws.readWebSocketMessage(conn)
 			if err != nil {
-				ws.client.logger.WithError(err).Error("读取WebSocket消息失败")
+				ws.client.logger.Error("读取WebSocket消息失败")
 				return
 			}
 			ws.refreshReadDeadline(conn)
 
 			if err := ws.handleMessage(msg); err != nil {
-				ws.client.logger.WithError(err).Error("处理WebSocket消息失败")
+				ws.client.logger.Error("处理WebSocket消息失败")
+				return
 			}
 		}
 	}
@@ -415,22 +519,30 @@ func (ws *WebSocketClient) readWebSocketMessage(conn *websocket.Conn) (*WebSocke
 		}
 	}
 
-	ws.client.logger.Debugf("收到WebSocket消息: %s", string(data))
-
 	var msg WebSocketMessage
 	if err := json.Unmarshal(data, &msg); err != nil {
 		return nil, fmt.Errorf("解析WebSocket消息失败: %w", err)
 	}
+	ws.client.logger.Debugf("收到WebSocket消息: signal=%d sn=%d bytes=%d", msg.S, msg.SN, len(data))
 	return &msg, nil
 }
 
 // attemptReconnect 尝试重连
 func (ws *WebSocketClient) attemptReconnect() {
-	ws.stateMu.Lock()
-	if ws.reconnecting {
-		ws.stateMu.Unlock()
+	ws.connectMu.Lock()
+	if ws.connecting {
+		ws.connectMu.Unlock()
 		return
 	}
+	ws.connecting = true
+	ws.connectMu.Unlock()
+	defer func() {
+		ws.connectMu.Lock()
+		ws.connecting = false
+		ws.connectMu.Unlock()
+	}()
+
+	ws.stateMu.Lock()
 	ws.reconnecting = true
 	ws.stateMu.Unlock()
 	defer func() {
@@ -454,7 +566,7 @@ func (ws *WebSocketClient) attemptReconnect() {
 		}
 
 		if err := ws.doConnect(); err != nil {
-			ws.client.logger.WithError(err).Error("重连失败")
+			ws.client.logger.Error("重连失败")
 			continue
 		}
 		ws.client.logger.Info("重连成功")
@@ -494,7 +606,7 @@ func (ws *WebSocketClient) handleMessage(msg *WebSocketMessage) error {
 		if pongSN == 0 && msg.D != nil {
 			var pong PongMessage
 			if err := json.Unmarshal(msg.D, &pong); err != nil {
-				ws.client.logger.WithError(err).Debug("解析Pong消息失败，可能是空的Pong")
+				ws.client.logger.Debug("解析Pong消息失败，可能是空的Pong")
 			} else {
 				pongSN = pong.SN
 			}
@@ -524,8 +636,11 @@ func (ws *WebSocketClient) handleEvent(msg *WebSocketMessage) error {
 
 func (ws *WebSocketClient) handleOrderedEvent(msg *WebSocketMessage) error {
 	ws.stateMu.Lock()
-	ws.expireEventBufferLocked(time.Now())
-	currentSN := ws.sn
+	if ws.expireEventBufferLocked(time.Now()) {
+		ws.stateMu.Unlock()
+		return ErrEventSequenceGap
+	}
+	currentSN := ws.receivedSN
 	if msg.SN <= currentSN {
 		ws.stateMu.Unlock()
 		ws.client.logger.Debugf("丢弃旧事件SN: %d，当前SN: %d", msg.SN, currentSN)
@@ -543,6 +658,7 @@ func (ws *WebSocketClient) handleOrderedEvent(msg *WebSocketMessage) error {
 		}
 		ws.eventBuffer[msg.SN] = bufferedEvent{msg: msg, created: time.Now()}
 		ws.stateMu.Unlock()
+		ws.scheduleGapTimer()
 		ws.client.logger.Warnf("收到乱序事件SN: %d，当前SN: %d，已缓冲", msg.SN, currentSN)
 		return nil
 	}
@@ -554,15 +670,22 @@ func (ws *WebSocketClient) handleOrderedEvent(msg *WebSocketMessage) error {
 
 	for {
 		ws.stateMu.Lock()
-		ws.expireEventBufferLocked(time.Now())
-		nextSN := ws.sn + 1
+		if ws.expireEventBufferLocked(time.Now()) {
+			ws.stateMu.Unlock()
+			return ErrEventSequenceGap
+		}
+		nextSN := ws.receivedSN + 1
 		next, ok := ws.eventBuffer[nextSN]
 		if !ok {
 			ws.stateMu.Unlock()
 			return nil
 		}
 		delete(ws.eventBuffer, nextSN)
+		bufferEmpty := len(ws.eventBuffer) == 0
 		ws.stateMu.Unlock()
+		if bufferEmpty {
+			ws.stopGapTimer()
+		}
 
 		if err := ws.dispatchOrderedEvent(next.msg); err != nil {
 			return err
@@ -570,19 +693,19 @@ func (ws *WebSocketClient) handleOrderedEvent(msg *WebSocketMessage) error {
 	}
 }
 
-func (ws *WebSocketClient) expireEventBufferLocked(now time.Time) {
+func (ws *WebSocketClient) expireEventBufferLocked(now time.Time) bool {
 	if ws.options.EventBufferTTL <= 0 || len(ws.eventBuffer) == 0 {
-		return
+		return false
 	}
+	expired := false
 	for sn, event := range ws.eventBuffer {
 		if now.Sub(event.created) > ws.options.EventBufferTTL {
 			delete(ws.eventBuffer, sn)
-			if sn > ws.sn {
-				ws.sn = sn
-			}
+			expired = true
 			ws.client.logger.Warnf("丢弃过期缓冲事件SN: %d", sn)
 		}
 	}
+	return expired
 }
 
 func (ws *WebSocketClient) dispatchOrderedEvent(msg *WebSocketMessage) error {
@@ -591,10 +714,11 @@ func (ws *WebSocketClient) dispatchOrderedEvent(msg *WebSocketMessage) error {
 		return err
 	}
 
-	if msg.SN > 0 {
-		ws.setSN(msg.SN)
+	if err := ws.enqueueDecodedEvent(event, true); err != nil {
+		return err
 	}
-	return ws.dispatchDecodedEvent(event)
+	ws.setReceivedSN(msg.SN)
+	return nil
 }
 
 func (ws *WebSocketClient) decodeEvent(msg *WebSocketMessage) (*Event, error) {
@@ -608,14 +732,18 @@ func (ws *WebSocketClient) decodeEvent(msg *WebSocketMessage) (*Event, error) {
 }
 
 func (ws *WebSocketClient) dispatchDecodedEvent(event *Event) error {
-	ws.client.logger.Debugf("收到事件: 类型=%d, 内容=%s", event.Type, event.Content)
+	return ws.enqueueDecodedEvent(event, false)
+}
+
+func (ws *WebSocketClient) enqueueDecodedEvent(event *Event, ordered bool) error {
+	ws.client.logger.Debugf("收到事件: 类型=%d sn=%d", event.Type, event.SN)
 	select {
 	case <-ws.ctx.Done():
 		return ws.ctx.Err()
 	default:
 	}
 	select {
-	case ws.dispatchQueue <- event:
+	case ws.dispatchQueue <- queuedWebSocketEvent{event: event, ordered: ordered, generation: ws.getGeneration()}:
 		return nil
 	case <-ws.ctx.Done():
 		return ws.ctx.Err()
@@ -629,12 +757,25 @@ func (ws *WebSocketClient) runEventDispatcher() {
 		select {
 		case <-ws.ctx.Done():
 			return
-		case event := <-ws.dispatchQueue:
-			err := ws.dispatcher.dispatch(event, func(recovered any) {
-				ws.client.logger.Errorf("事件处理器发生panic: %v", recovered)
+		case queued := <-ws.dispatchQueue:
+			if queued.ordered && queued.generation != ws.getGeneration() {
+				continue
+			}
+			err := ws.dispatcher.dispatch(queued.event, func(recovered any) {
+				ws.client.logger.Error("事件处理器发生panic")
 			})
 			if err != nil {
-				ws.client.logger.WithError(err).Error("分发WebSocket事件失败")
+				ws.client.logger.Error("分发WebSocket事件失败")
+				if queued.ordered {
+					if ws.IsConnected() {
+						ws.markReconnectPending()
+					}
+					ws.invalidateGeneration(queued.generation)
+					_ = ws.closeActiveConnection()
+				}
+			}
+			if err == nil && queued.ordered && queued.generation == ws.getGeneration() {
+				ws.setSN(queued.event.SN)
 			}
 		}
 	}
@@ -654,7 +795,7 @@ func (ws *WebSocketClient) handleHello(msg *WebSocketMessage) error {
 	}
 
 	ws.setSessionID(hello.SessionID)
-	ws.client.logger.Infof("WebSocket会话建立成功: %s", hello.SessionID)
+	ws.client.logger.Info("WebSocket会话建立成功")
 	ws.startHeartbeat()
 
 	return nil
@@ -683,15 +824,13 @@ func (ws *WebSocketClient) handlePing(msg *WebSocketMessage) error {
 // handleReconnect 处理重连消息
 func (ws *WebSocketClient) handleReconnect(msg *WebSocketMessage) error {
 	ws.client.logger.Warn("服务器要求重连")
-	ws.stopHeartbeat()
-	ws.resetSessionStateForFreshReconnect()
-
-	ws.connMu.Lock()
-	if ws.conn != nil {
-		_ = ws.conn.Close()
+	if ws.IsConnected() {
+		ws.markReconnectPending()
 	}
-	ws.isConnected = false
-	ws.connMu.Unlock()
+	ws.stopHeartbeat()
+	ws.stopGapTimer()
+	ws.resetSessionStateForFreshReconnect()
+	_ = ws.closeActiveConnection()
 
 	return nil
 }
@@ -720,7 +859,7 @@ func (ws *WebSocketClient) startHeartbeat() {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				ws.client.logger.Errorf("心跳处理发生panic: %v", r)
+				ws.client.logger.Error("心跳处理发生panic")
 			}
 		}()
 
@@ -739,16 +878,12 @@ func (ws *WebSocketClient) startHeartbeat() {
 
 				if err := ws.sendMessage(&ping); err != nil {
 					consecutiveFailures++
-					ws.client.logger.WithError(err).Errorf("发送心跳失败 (%d/%d)", consecutiveFailures, maxFailures)
+					ws.client.logger.Errorf("发送心跳失败 (%d/%d)", consecutiveFailures, maxFailures)
 
 					if consecutiveFailures >= maxFailures {
 						ws.client.logger.Error("连续心跳失败，触发重连")
-						ws.connMu.Lock()
-						ws.isConnected = false
-						if ws.conn != nil {
-							ws.conn.Close()
-						}
-						ws.connMu.Unlock()
+						ws.markReconnectPending()
+						_ = ws.closeActiveConnection()
 						return
 					}
 				} else {
@@ -797,12 +932,8 @@ func (ws *WebSocketClient) trackPendingPing(sn int) {
 		}
 
 		ws.client.logger.Errorf("WebSocket Pong超时，SN: %d", sn)
-		ws.connMu.Lock()
-		ws.isConnected = false
-		if ws.conn != nil {
-			_ = ws.conn.Close()
-		}
-		ws.connMu.Unlock()
+		ws.markReconnectPending()
+		_ = ws.closeActiveConnection()
 	})
 }
 
@@ -829,7 +960,7 @@ func (ws *WebSocketClient) sendMessage(msg *WebSocketMessage) error {
 		return fmt.Errorf("序列化消息失败: %w", err)
 	}
 
-	ws.client.logger.Debugf("发送WebSocket消息: %s", string(data))
+	ws.client.logger.Debugf("发送WebSocket消息: signal=%d sn=%d bytes=%d", msg.S, msg.SN, len(data))
 
 	ws.connMu.RLock()
 	conn := ws.conn
@@ -848,6 +979,33 @@ func (ws *WebSocketClient) setSN(sn int) {
 	ws.stateMu.Lock()
 	defer ws.stateMu.Unlock()
 	ws.sn = sn
+}
+
+func (ws *WebSocketClient) setReceivedSN(sn int) {
+	ws.stateMu.Lock()
+	defer ws.stateMu.Unlock()
+	ws.receivedSN = sn
+}
+
+func (ws *WebSocketClient) getReceivedSN() int {
+	ws.stateMu.RLock()
+	defer ws.stateMu.RUnlock()
+	return ws.receivedSN
+}
+
+func (ws *WebSocketClient) getGeneration() uint64 {
+	ws.stateMu.RLock()
+	defer ws.stateMu.RUnlock()
+	return ws.generation
+}
+
+func (ws *WebSocketClient) activateConnectionGeneration() {
+	ws.stopGapTimer()
+	ws.stateMu.Lock()
+	ws.generation++
+	ws.receivedSN = ws.sn
+	ws.eventBuffer = make(map[int]bufferedEvent)
+	ws.stateMu.Unlock()
 }
 
 func (ws *WebSocketClient) getSN() int {
@@ -881,8 +1039,11 @@ func (ws *WebSocketClient) setReconnectCount(count int) {
 }
 
 func (ws *WebSocketClient) resetSessionStateForFreshReconnect() {
+	ws.stopGapTimer()
 	ws.stateMu.Lock()
+	ws.generation++
 	ws.sn = 0
+	ws.receivedSN = 0
 	ws.sessionID = ""
 	ws.gatewayURL = ""
 	ws.eventBuffer = make(map[int]bufferedEvent)
@@ -890,10 +1051,71 @@ func (ws *WebSocketClient) resetSessionStateForFreshReconnect() {
 	ws.clearPendingPing()
 }
 
-func (ws *WebSocketClient) getReconnectCount() int {
-	ws.stateMu.RLock()
-	defer ws.stateMu.RUnlock()
-	return ws.reconnectCount
+func (ws *WebSocketClient) invalidateGeneration(generation uint64) {
+	ws.stopGapTimer()
+	ws.stateMu.Lock()
+	if ws.generation == generation {
+		ws.generation++
+		ws.receivedSN = ws.sn
+		ws.eventBuffer = make(map[int]bufferedEvent)
+	}
+	ws.stateMu.Unlock()
+}
+
+func (ws *WebSocketClient) scheduleGapTimer() {
+	ws.gapTimerMu.Lock()
+	if ws.gapTimer != nil {
+		ws.gapTimerMu.Unlock()
+		return
+	}
+	generation := ws.getGeneration()
+	ws.gapTimer = time.AfterFunc(ws.options.EventBufferTTL, func() {
+		ws.gapTimerMu.Lock()
+		ws.gapTimer = nil
+		ws.gapTimerMu.Unlock()
+		if ws.ctx.Err() != nil || generation != ws.getGeneration() {
+			return
+		}
+		ws.stateMu.RLock()
+		hasGap := len(ws.eventBuffer) > 0
+		ws.stateMu.RUnlock()
+		if hasGap {
+			ws.client.logger.Warn("WebSocket事件序列缺口超时，关闭连接以重放")
+			ws.markReconnectPending()
+			_ = ws.closeActiveConnection()
+		}
+	})
+	ws.gapTimerMu.Unlock()
+}
+
+func (ws *WebSocketClient) stopGapTimer() {
+	ws.gapTimerMu.Lock()
+	if ws.gapTimer != nil {
+		ws.gapTimer.Stop()
+		ws.gapTimer = nil
+	}
+	ws.gapTimerMu.Unlock()
+}
+
+func (ws *WebSocketClient) closeActiveConnection() error {
+	ws.connMu.Lock()
+	conn := ws.conn
+	ws.conn = nil
+	ws.isConnected = false
+	ws.connMu.Unlock()
+	if conn != nil {
+		return conn.Close()
+	}
+	return nil
+}
+
+func (ws *WebSocketClient) markReconnectPending() {
+	if ws.ctx.Err() != nil {
+		return
+	}
+	ws.stateMu.Lock()
+	ws.reconnecting = true
+	ws.stateMu.Unlock()
 }
 
 func (ws *WebSocketClient) incrementReconnectCount() int {
@@ -909,7 +1131,14 @@ func (ws *WebSocketClient) decompress(data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 
-	return io.ReadAll(r)
+	decoded, err := io.ReadAll(io.LimitReader(r, ws.options.ReadLimit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(decoded)) > ws.options.ReadLimit {
+		return nil, fmt.Errorf("解压消息超过读取限制")
+	}
+	return decoded, nil
 }

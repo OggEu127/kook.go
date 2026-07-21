@@ -13,7 +13,19 @@ type InviteService struct {
 }
 
 // GetInviteList 获取邀请列表。
-func (s *InviteService) GetInviteList(ctx context.Context, params InviteListParams) (*ListInvitesResponse, error) {
+func (s *InviteService) GetInviteList(ctx context.Context, args ...any) (*ListInvitesResponse, error) {
+	params, err := compatParams("GetInviteList", args, func(args []any) (InviteListParams, bool) {
+		if len(args) != 3 {
+			return InviteListParams{}, false
+		}
+		guildID, okGuild := compatString(args[0])
+		page, okPage := compatInt(args[1])
+		pageSize, okPageSize := compatInt(args[2])
+		return InviteListParams{GuildID: guildID, Page: optionalPositiveInt(page), PageSize: optionalPositiveInt(pageSize)}, okGuild && okPage && okPageSize
+	})
+	if err != nil {
+		return nil, err
+	}
 	if params.GuildID == "" && params.ChannelID == "" {
 		return nil, fmt.Errorf("服务器ID或频道ID不能为空")
 	}
@@ -50,6 +62,8 @@ func (s *InviteService) CreateInvite(ctx context.Context, params CreateInvitePar
 	}
 	if params.SettingTimes != nil {
 		requestParams["setting_times"] = *params.SettingTimes
+	} else if params.Setting != 0 {
+		requestParams["setting_times"] = params.Setting
 	}
 
 	resp, err := s.client.Post(ctx, "invite/create", requestParams)
@@ -66,7 +80,17 @@ func (s *InviteService) CreateInvite(ctx context.Context, params CreateInvitePar
 }
 
 // DeleteInvite 删除邀请
-func (s *InviteService) DeleteInvite(ctx context.Context, params DeleteInviteParams) error {
+func (s *InviteService) DeleteInvite(ctx context.Context, args ...any) error {
+	params, err := compatParams("DeleteInvite", args, func(args []any) (DeleteInviteParams, bool) {
+		if len(args) != 1 {
+			return DeleteInviteParams{}, false
+		}
+		urlCode, ok := compatString(args[0])
+		return DeleteInviteParams{URLCode: urlCode}, ok
+	})
+	if err != nil {
+		return err
+	}
 	if params.URLCode == "" {
 		return fmt.Errorf("邀请码不能为空")
 	}
@@ -77,7 +101,7 @@ func (s *InviteService) DeleteInvite(ctx context.Context, params DeleteInvitePar
 	if params.ChannelID != "" {
 		body["channel_id"] = params.ChannelID
 	}
-	_, err := s.client.Post(ctx, "invite/delete", body)
+	_, err = s.client.Post(ctx, "invite/delete", body)
 	return err
 }
 
@@ -129,6 +153,7 @@ type CreateInviteParams struct {
 	ChannelID    string `json:"channel_id,omitempty"`    // 频道ID
 	Duration     *int   `json:"duration,omitempty"`      // 0永久；nil使用服务端默认值
 	SettingTimes *int   `json:"setting_times,omitempty"` // -1无限制；nil使用服务端默认值
+	Setting      int    `json:"setting,omitempty"`       // v1.1.1兼容字段；发送时映射为setting_times
 }
 
 // DeleteInviteParams 删除邀请参数。

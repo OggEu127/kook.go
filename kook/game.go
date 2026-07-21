@@ -16,7 +16,17 @@ type GameListParams struct {
 }
 
 // GetGameList 获取游戏列表。
-func (s *GameService) GetGameList(ctx context.Context, params GameListParams) (*ListGamesResponse, error) {
+func (s *GameService) GetGameList(ctx context.Context, args ...any) (*ListGamesResponse, error) {
+	params, err := compatParams("GetGameList", args, func(args []any) (GameListParams, bool) {
+		if len(args) != 1 {
+			return GameListParams{}, false
+		}
+		gameType, ok := compatString(args[0])
+		return GameListParams{Type: gameType}, ok
+	})
+	if err != nil {
+		return nil, err
+	}
 	query := make(map[string]string)
 	if params.Type != "" {
 		query["type"] = params.Type
@@ -41,7 +51,18 @@ type GameCreateParams struct {
 }
 
 // CreateGame 添加游戏。
-func (s *GameService) CreateGame(ctx context.Context, params GameCreateParams) (*Game, error) {
+func (s *GameService) CreateGame(ctx context.Context, args ...any) (*Game, error) {
+	params, err := compatParams("CreateGame", args, func(args []any) (GameCreateParams, bool) {
+		if len(args) != 2 {
+			return GameCreateParams{}, false
+		}
+		name, okName := compatString(args[0])
+		icon, okIcon := compatString(args[1])
+		return GameCreateParams{Name: name, Icon: icon}, okName && okIcon
+	})
+	if err != nil {
+		return nil, err
+	}
 	if params.Name == "" {
 		return nil, fmt.Errorf("游戏名称不能为空")
 	}
@@ -74,7 +95,19 @@ type GameUpdateParams struct {
 }
 
 // UpdateGame 更新游戏。
-func (s *GameService) UpdateGame(ctx context.Context, params GameUpdateParams) (*Game, error) {
+func (s *GameService) UpdateGame(ctx context.Context, args ...any) (*Game, error) {
+	params, err := compatParams("UpdateGame", args, func(args []any) (GameUpdateParams, bool) {
+		if len(args) != 3 {
+			return GameUpdateParams{}, false
+		}
+		id, okID := compatInt(args[0])
+		name, okName := compatString(args[1])
+		icon, okIcon := compatString(args[2])
+		return GameUpdateParams{ID: id, Name: stringPointer(name), Icon: stringPointer(icon)}, okID && okName && okIcon
+	})
+	if err != nil {
+		return nil, err
+	}
 	if params.ID <= 0 {
 		return nil, fmt.Errorf("游戏ID不能为空")
 	}
@@ -108,7 +141,17 @@ type GameDeleteParams struct {
 }
 
 // DeleteGame 删除游戏。
-func (s *GameService) DeleteGame(ctx context.Context, params GameDeleteParams) error {
+func (s *GameService) DeleteGame(ctx context.Context, args ...any) error {
+	params, err := compatParams("DeleteGame", args, func(args []any) (GameDeleteParams, bool) {
+		if len(args) != 1 {
+			return GameDeleteParams{}, false
+		}
+		id, ok := compatInt(args[0])
+		return GameDeleteParams{ID: id}, ok
+	})
+	if err != nil {
+		return err
+	}
 	if params.ID <= 0 {
 		return fmt.Errorf("游戏ID不能为空")
 	}
@@ -117,7 +160,7 @@ func (s *GameService) DeleteGame(ctx context.Context, params GameDeleteParams) e
 		"id": params.ID,
 	}
 
-	_, err := s.client.Post(ctx, "game/delete", body)
+	_, err = s.client.Post(ctx, "game/delete", body)
 	return err
 }
 
@@ -166,7 +209,17 @@ type GameDeleteActivityParams struct {
 }
 
 // DeleteActivity 删除游戏或音乐动态。
-func (s *GameService) DeleteActivity(ctx context.Context, params GameDeleteActivityParams) error {
+func (s *GameService) DeleteActivity(ctx context.Context, args ...any) error {
+	params, err := compatParams("DeleteActivity", args, func(args []any) (GameDeleteActivityParams, bool) {
+		if len(args) != 1 {
+			return GameDeleteActivityParams{}, false
+		}
+		dataType, ok := compatInt(args[0])
+		return GameDeleteActivityParams{DataType: dataType}, ok
+	})
+	if err != nil {
+		return err
+	}
 	if params.DataType != GameActivityTypeGame && params.DataType != GameActivityTypeMusic {
 		return fmt.Errorf("数据类型必须为1（游戏）或2（音乐）")
 	}
@@ -175,8 +228,36 @@ func (s *GameService) DeleteActivity(ctx context.Context, params GameDeleteActiv
 		"data_type": params.DataType,
 	}
 
-	_, err := s.client.Post(ctx, "game/delete-activity", body)
+	_, err = s.client.Post(ctx, "game/delete-activity", body)
 	return err
+}
+
+// MusicActivityParams 保留 v1.1.1 的音乐动态参数。
+type MusicActivityParams struct {
+	Software  string `json:"software"`
+	Singer    string `json:"singer"`
+	MusicName string `json:"music_name"`
+}
+
+func (s *GameService) AddGameActivity(ctx context.Context, id int) error {
+	return s.AddActivity(ctx, GameActivityParams{ID: &id, DataType: GameActivityTypeGame})
+}
+
+func (s *GameService) AddMusicActivity(ctx context.Context, params MusicActivityParams) error {
+	return s.AddActivity(ctx, GameActivityParams{
+		DataType:  GameActivityTypeMusic,
+		Software:  params.Software,
+		Singer:    params.Singer,
+		MusicName: params.MusicName,
+	})
+}
+
+func (s *GameService) DeleteGameActivity(ctx context.Context) error {
+	return s.DeleteActivity(ctx, GameActivityTypeGame)
+}
+
+func (s *GameService) DeleteMusicActivity(ctx context.Context) error {
+	return s.DeleteActivity(ctx, GameActivityTypeMusic)
 }
 
 // 数据结构定义

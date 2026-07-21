@@ -37,7 +37,27 @@ func (p MessageListParams) query() map[string]string {
 	return query
 }
 
-func (s *MessageService) GetMessageList(ctx context.Context, params MessageListParams) (*ListMessagesResponse, error) {
+func (s *MessageService) GetMessageList(ctx context.Context, args ...any) (*ListMessagesResponse, error) {
+	params, err := compatParams("GetMessageList", args, func(args []any) (MessageListParams, bool) {
+		if len(args) != 2 {
+			return MessageListParams{}, false
+		}
+		targetID, okTarget := compatString(args[0])
+		legacy, okParams := args[1].(GetMessageListParams)
+		if legacy.Type != "" && legacy.Type != "channel" && legacy.Type != "guild" {
+			return MessageListParams{}, false
+		}
+		return MessageListParams{
+			TargetID: targetID,
+			MsgID:    legacy.MsgID,
+			Pin:      optionalPositiveInt(legacy.Pin),
+			Flag:     legacy.Flag,
+			PageSize: optionalPositiveInt(legacy.PageSize),
+		}, okTarget && okParams
+	})
+	if err != nil {
+		return nil, err
+	}
 	if params.TargetID == "" {
 		return nil, fmt.Errorf("target_id不能为空")
 	}
@@ -56,7 +76,17 @@ type MessageViewParams struct {
 	MsgID string
 }
 
-func (s *MessageService) GetMessage(ctx context.Context, params MessageViewParams) (*Message, error) {
+func (s *MessageService) GetMessage(ctx context.Context, args ...any) (*Message, error) {
+	params, err := compatParams("GetMessage", args, func(args []any) (MessageViewParams, bool) {
+		if len(args) != 1 {
+			return MessageViewParams{}, false
+		}
+		msgID, ok := compatString(args[0])
+		return MessageViewParams{MsgID: msgID}, ok
+	})
+	if err != nil {
+		return nil, err
+	}
 	if params.MsgID == "" {
 		return nil, fmt.Errorf("msg_id不能为空")
 	}
@@ -133,11 +163,21 @@ type MessageDeleteParams struct {
 	MsgID string
 }
 
-func (s *MessageService) DeleteMessage(ctx context.Context, params MessageDeleteParams) error {
+func (s *MessageService) DeleteMessage(ctx context.Context, args ...any) error {
+	params, err := compatParams("DeleteMessage", args, func(args []any) (MessageDeleteParams, bool) {
+		if len(args) != 1 {
+			return MessageDeleteParams{}, false
+		}
+		msgID, ok := compatString(args[0])
+		return MessageDeleteParams{MsgID: msgID}, ok
+	})
+	if err != nil {
+		return err
+	}
 	if params.MsgID == "" {
 		return fmt.Errorf("msg_id不能为空")
 	}
-	_, err := s.client.Post(ctx, "message/delete", map[string]interface{}{"msg_id": params.MsgID})
+	_, err = s.client.Post(ctx, "message/delete", map[string]interface{}{"msg_id": params.MsgID})
 	return err
 }
 
@@ -158,7 +198,18 @@ type MessageReactionParams struct {
 	Emoji string
 }
 
-func (s *MessageService) AddReaction(ctx context.Context, params MessageReactionParams) error {
+func (s *MessageService) AddReaction(ctx context.Context, args ...any) error {
+	params, err := compatParams("AddReaction", args, func(args []any) (MessageReactionParams, bool) {
+		if len(args) != 2 {
+			return MessageReactionParams{}, false
+		}
+		msgID, okMsg := compatString(args[0])
+		emoji, okEmoji := compatString(args[1])
+		return MessageReactionParams{MsgID: msgID, Emoji: emoji}, okMsg && okEmoji
+	})
+	if err != nil {
+		return err
+	}
 	return s.mutateReaction(ctx, "message/add-reaction", params.MsgID, params.Emoji, "")
 }
 
@@ -168,7 +219,19 @@ type MessageDeleteReactionParams struct {
 	UserID string
 }
 
-func (s *MessageService) DeleteReaction(ctx context.Context, params MessageDeleteReactionParams) error {
+func (s *MessageService) DeleteReaction(ctx context.Context, args ...any) error {
+	params, err := compatParams("DeleteReaction", args, func(args []any) (MessageDeleteReactionParams, bool) {
+		if len(args) != 3 {
+			return MessageDeleteReactionParams{}, false
+		}
+		msgID, okMsg := compatString(args[0])
+		emoji, okEmoji := compatString(args[1])
+		userID, okUser := compatString(args[2])
+		return MessageDeleteReactionParams{MsgID: msgID, Emoji: emoji, UserID: userID}, okMsg && okEmoji && okUser
+	})
+	if err != nil {
+		return err
+	}
 	return s.mutateReaction(ctx, "message/delete-reaction", params.MsgID, params.Emoji, params.UserID)
 }
 
@@ -217,7 +280,18 @@ type MessagePinParams struct {
 	TargetID string
 }
 
-func (s *MessageService) PinMessage(ctx context.Context, params MessagePinParams) error {
+func (s *MessageService) PinMessage(ctx context.Context, args ...any) error {
+	params, err := compatParams("PinMessage", args, func(args []any) (MessagePinParams, bool) {
+		if len(args) != 2 {
+			return MessagePinParams{}, false
+		}
+		msgID, okMsg := compatString(args[0])
+		targetID, okTarget := compatString(args[1])
+		return MessagePinParams{MsgID: msgID, TargetID: targetID}, okMsg && okTarget
+	})
+	if err != nil {
+		return err
+	}
 	return s.pinMessage(ctx, "message/pin", params.MsgID, params.TargetID)
 }
 
@@ -226,8 +300,154 @@ type MessageUnpinParams struct {
 	TargetID string
 }
 
-func (s *MessageService) UnpinMessage(ctx context.Context, params MessageUnpinParams) error {
+func (s *MessageService) UnpinMessage(ctx context.Context, args ...any) error {
+	params, err := compatParams("UnpinMessage", args, func(args []any) (MessageUnpinParams, bool) {
+		if len(args) != 2 {
+			return MessageUnpinParams{}, false
+		}
+		msgID, okMsg := compatString(args[0])
+		targetID, okTarget := compatString(args[1])
+		return MessageUnpinParams{MsgID: msgID, TargetID: targetID}, okMsg && okTarget
+	})
+	if err != nil {
+		return err
+	}
 	return s.pinMessage(ctx, "message/unpin", params.MsgID, params.TargetID)
+}
+
+// SendMessageParams 保留 v1.1.1 的统一频道/私信消息参数。
+type SendMessageParams struct {
+	Type         string `json:"type,omitempty"`
+	TargetID     string `json:"target_id,omitempty"`
+	ChatCode     string `json:"chat_code,omitempty"`
+	Content      string `json:"content"`
+	MsgType      int    `json:"msg_type,omitempty"`
+	Quote        string `json:"quote,omitempty"`
+	Nonce        string `json:"nonce,omitempty"`
+	TempTargetID string `json:"temp_target_id,omitempty"`
+	TemplateID   string `json:"template_id,omitempty"`
+	ReplyMsgID   string `json:"reply_msg_id,omitempty"`
+}
+
+// GetMessageListParams 保留 v1.1.1 的消息列表参数。
+type GetMessageListParams struct {
+	Type     string `json:"type,omitempty"`
+	ChatCode string `json:"chat_code,omitempty"`
+	MsgID    string `json:"msg_id,omitempty"`
+	Pin      int    `json:"pin,omitempty"`
+	Flag     string `json:"flag,omitempty"`
+	PageSize int    `json:"page_size,omitempty"`
+}
+
+// SendMessage 保留 v1.1.1 的统一发送入口，并只映射当前官方频道/私信端点。
+func (s *MessageService) SendMessage(ctx context.Context, params SendMessageParams) (*Message, error) {
+	msgType := MessageType(params.MsgType)
+	if msgType <= 0 {
+		msgType = MessageTypeKMD
+	}
+	var result *MessageCreateResult
+	var err error
+	switch params.Type {
+	case "private", "direct", "dm":
+		result, err = s.client.DirectMessage.Create(ctx, DirectMessageCreateParams{
+			TargetID: params.TargetID, ChatCode: params.ChatCode, Content: params.Content,
+			Type: &msgType, Quote: params.Quote, Nonce: params.Nonce,
+			TemplateID: params.TemplateID, ReplyMsgID: params.ReplyMsgID,
+		})
+	case "", "channel", "guild":
+		result, err = s.Create(ctx, MessageCreateParams{
+			TargetID: params.TargetID, Content: params.Content, Type: &msgType,
+			Quote: params.Quote, Nonce: params.Nonce, TempTargetID: params.TempTargetID,
+			TemplateID: params.TemplateID, ReplyMsgID: params.ReplyMsgID,
+		})
+	default:
+		return nil, NewValidationErrorWithValue("type", "消息作用域必须为channel或private", params.Type)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &Message{ID: result.MsgID, Type: msgType, Content: params.Content, CreateAt: result.MsgTimestamp}, nil
+}
+
+func (s *MessageService) SendCardMessage(ctx context.Context, params SendMessageParams) (*Message, error) {
+	params.MsgType = int(MessageTypeCard)
+	return s.SendMessage(ctx, params)
+}
+
+func (s *MessageService) GetDirectMessage(ctx context.Context, chatCode, msgID string) (*Message, error) {
+	return s.client.DirectMessage.View(ctx, DirectMessageViewParams{ChatCode: chatCode, MsgID: msgID})
+}
+
+func (s *MessageService) UpdateMessage(ctx context.Context, msgID, content, quote, tempTargetID string) (*Message, error) {
+	if err := s.Update(ctx, UpdateMessageParams{
+		MsgID: msgID, Content: content, Quote: stringPointer(quote), TempTargetID: stringPointer(tempTargetID),
+	}); err != nil {
+		return nil, err
+	}
+	return s.GetMessage(ctx, msgID)
+}
+
+func (s *MessageService) UpdateDirectMessage(ctx context.Context, msgID, content, quote string) error {
+	return s.client.DirectMessage.Update(ctx, DirectMessageUpdateParams{MsgID: msgID, Content: content, Quote: stringPointer(quote)})
+}
+
+func (s *MessageService) DeleteDirectMessage(ctx context.Context, msgID string) error {
+	return s.client.DirectMessage.Delete(ctx, DirectMessageDeleteParams{MsgID: msgID})
+}
+
+func (s *MessageService) AddDirectReaction(ctx context.Context, msgID, emoji string) error {
+	return s.client.DirectMessage.AddReaction(ctx, DirectMessageReactionParams{MsgID: msgID, Emoji: emoji})
+}
+
+func (s *MessageService) DeleteDirectReaction(ctx context.Context, msgID, emoji, userID string) error {
+	return s.client.DirectMessage.DeleteReaction(ctx, DirectMessageDeleteReactionParams{MsgID: msgID, Emoji: emoji, UserID: userID})
+}
+
+func (s *MessageService) GetReactionUserList(ctx context.Context, msgID, emoji string) ([]User, error) {
+	users, err := s.ReactionUsers(ctx, MessageReactionUsersParams{MsgID: msgID, Emoji: emoji})
+	if err != nil {
+		return nil, err
+	}
+	result := make([]User, len(users))
+	for i := range users {
+		result[i] = users[i].User
+	}
+	return result, nil
+}
+
+func (s *MessageService) GetDirectReactionUserList(ctx context.Context, msgID, emoji string) ([]User, error) {
+	users, err := s.client.DirectMessage.ReactionUsers(ctx, DirectMessageReactionUsersParams{MsgID: msgID, Emoji: emoji})
+	if err != nil {
+		return nil, err
+	}
+	result := make([]User, len(users))
+	for i := range users {
+		result[i] = users[i].User
+	}
+	return result, nil
+}
+
+// CheckCardResponse 保留 v1.1.1 返回类型。
+type CheckCardResponse struct {
+	Mention struct {
+		Mentions     []string      `json:"mentions"`
+		MentionRoles []string      `json:"mentionRoles"`
+		MentionAll   bool          `json:"mentionAll"`
+		MentionHere  bool          `json:"mentionHere"`
+		MentionPart  []interface{} `json:"mentionPart"`
+		NavChannels  []interface{} `json:"navChannels"`
+		ChannelPart  []interface{} `json:"channelPart"`
+		GuildEmojis  []interface{} `json:"guildEmojis"`
+	} `json:"mention"`
+	Content string `json:"content"`
+}
+
+func (s *MessageService) CheckCard(context.Context, string) (*CheckCardResponse, error) {
+	return nil, unsupportedEndpoint("message/check-card")
+}
+
+func (s *MessageService) SendPipeMessage(context.Context, SendMessageParams) (*Message, error) {
+	return nil, unsupportedEndpoint("message/send-pipemsg without access_token")
 }
 
 func (s *MessageService) pinMessage(ctx context.Context, endpoint, msgID, targetID string) error {

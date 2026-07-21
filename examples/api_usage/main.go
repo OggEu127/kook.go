@@ -17,7 +17,7 @@ func main() {
 
 	// 创建客户端
 	client := kook.NewClient(token)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// 演示用户API
 	demonstrateUserAPI(client)

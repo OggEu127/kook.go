@@ -18,7 +18,17 @@ type ThreadCategoryListParams struct {
 }
 
 // GetThreadCategories 获取帖子分区列表。
-func (s *ThreadService) GetThreadCategories(ctx context.Context, params ThreadCategoryListParams) (*ThreadCategoryListResponse, error) {
+func (s *ThreadService) GetThreadCategories(ctx context.Context, args ...any) (*ThreadCategoryListResponse, error) {
+	params, err := compatParams("GetThreadCategories", args, func(args []any) (ThreadCategoryListParams, bool) {
+		if len(args) != 1 {
+			return ThreadCategoryListParams{}, false
+		}
+		channelID, ok := compatString(args[0])
+		return ThreadCategoryListParams{ChannelID: channelID}, ok
+	})
+	if err != nil {
+		return nil, err
+	}
 	if params.ChannelID == "" {
 		return nil, fmt.Errorf("频道ID不能为空")
 	}
@@ -91,13 +101,50 @@ func (s *ThreadService) ReplyThread(ctx context.Context, params ReplyThreadParam
 	return &result, nil
 }
 
+// ThreadReply 保留 v1.1.1 的精简回复类型。
+type ThreadReply struct {
+	ID        string `json:"id"`
+	PostID    string `json:"post_id"`
+	Content   string `json:"content"`
+	User      User   `json:"user"`
+	CreateAt  int64  `json:"create_at"`
+	UpdatedAt int64  `json:"updated_at"`
+}
+
+// ReplyThreadLegacy 提供 v1.1.1 的返回值形状。
+func (s *ThreadService) ReplyThreadLegacy(ctx context.Context, params ReplyThreadParams) (*ThreadReply, error) {
+	post, err := s.ReplyThread(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+	return &ThreadReply{
+		ID:        post.ID,
+		PostID:    post.ThreadID,
+		Content:   post.Content,
+		User:      post.User,
+		CreateAt:  post.CreateTime,
+		UpdatedAt: 0,
+	}, nil
+}
+
 type ThreadViewParams struct {
 	ChannelID string
 	ThreadID  string
 }
 
 // GetThread 获取帖子详情。
-func (s *ThreadService) GetThread(ctx context.Context, params ThreadViewParams) (*Thread, error) {
+func (s *ThreadService) GetThread(ctx context.Context, args ...any) (*Thread, error) {
+	params, err := compatParams("GetThread", args, func(args []any) (ThreadViewParams, bool) {
+		if len(args) != 2 {
+			return ThreadViewParams{}, false
+		}
+		channelID, okChannel := compatString(args[0])
+		threadID, okThread := compatString(args[1])
+		return ThreadViewParams{ChannelID: channelID, ThreadID: threadID}, okChannel && okThread
+	})
+	if err != nil {
+		return nil, err
+	}
 	if params.ChannelID == "" {
 		return nil, fmt.Errorf("频道ID不能为空")
 	}
@@ -147,7 +194,19 @@ type ThreadDeleteParams struct {
 }
 
 // DeleteThread 删除帖子或帖子回复。
-func (s *ThreadService) DeleteThread(ctx context.Context, params ThreadDeleteParams) error {
+func (s *ThreadService) DeleteThread(ctx context.Context, args ...any) error {
+	params, err := compatParams("DeleteThread", args, func(args []any) (ThreadDeleteParams, bool) {
+		if len(args) != 3 {
+			return ThreadDeleteParams{}, false
+		}
+		channelID, okChannel := compatString(args[0])
+		threadID, okThread := compatString(args[1])
+		postID, okPost := compatString(args[2])
+		return ThreadDeleteParams{ChannelID: channelID, ThreadID: threadID, PostID: postID}, okChannel && okThread && okPost
+	})
+	if err != nil {
+		return err
+	}
 	if params.ChannelID == "" {
 		return fmt.Errorf("频道ID不能为空")
 	}
@@ -165,7 +224,7 @@ func (s *ThreadService) DeleteThread(ctx context.Context, params ThreadDeletePar
 		body["post_id"] = params.PostID
 	}
 
-	_, err := s.client.Post(ctx, "thread/delete", body)
+	_, err = s.client.Post(ctx, "thread/delete", body)
 	return err
 }
 
@@ -195,6 +254,16 @@ func (s *ThreadService) GetThreadPosts(ctx context.Context, params GetThreadPost
 	}
 
 	return &result, nil
+}
+
+// GetThreadPost 是 v1.1.1 的回复列表别名。
+func (s *ThreadService) GetThreadPost(ctx context.Context, channelID, threadID string) (*ThreadPostListResponse, error) {
+	return s.GetThreadPosts(ctx, GetThreadPostsParams{
+		ChannelID: channelID,
+		ThreadID:  threadID,
+		Order:     "asc",
+		Page:      1,
+	})
 }
 
 // CreateThreadParams 发布帖子参数
@@ -301,11 +370,12 @@ func (p GetThreadPostsParams) toQuery() map[string]string {
 
 // ThreadCategory 帖子分区
 type ThreadCategory struct {
-	ID    string                     `json:"id"`
-	Name  string                     `json:"name"`
-	Allow int                        `json:"allow"`
-	Deny  int                        `json:"deny"`
-	Roles []ThreadCategoryPermission `json:"roles"`
+	ID        string                     `json:"id"`
+	Name      string                     `json:"name"`
+	ChannelID string                     `json:"channel_id"`
+	Allow     int                        `json:"allow"`
+	Deny      int                        `json:"deny"`
+	Roles     []ThreadCategoryPermission `json:"roles"`
 }
 
 func (c *ThreadCategory) UnmarshalJSON(data []byte) error {
@@ -418,6 +488,8 @@ type ChannelPart struct {
 // Thread 帖子
 type Thread struct {
 	ID                 string            `json:"id"`
+	ChannelID          string            `json:"channel_id"`
+	CategoryID         string            `json:"category_id"`
 	Status             int               `json:"status"`
 	Title              string            `json:"title"`
 	Cover              string            `json:"cover"`
@@ -429,6 +501,8 @@ type Thread struct {
 	Tags               []json.RawMessage `json:"tags"`
 	LatestActiveTime   int64             `json:"latest_active_time"`
 	CreateTime         int64             `json:"create_time"`
+	CreateAt           int64             `json:"create_at"`
+	UpdatedAt          int64             `json:"updated_at"`
 	IsUpdated          bool              `json:"is_updated"`
 	ContentDeleted     bool              `json:"content_deleted"`
 	ContentDeletedType int               `json:"content_deleted_type"`

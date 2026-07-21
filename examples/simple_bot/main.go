@@ -20,7 +20,7 @@ func main() {
 
 	// 创建客户端
 	client := kook.NewClient(token)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// 获取当前用户信息
 	user, err := client.User.GetMe(context.Background())

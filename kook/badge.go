@@ -12,6 +12,22 @@ type BadgeService struct {
 	client *Client
 }
 
+// Badge 保留 v1.1.1 中未被当前官方徽章图片接口确认的数据类型。
+type Badge struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Icon        string `json:"icon"`
+	Type        int    `json:"type"`
+	Level       int    `json:"level"`
+	Unlocked    bool   `json:"unlocked"`
+}
+
+// GetGuildBadges 是 v1.1.1 兼容入口，不会访问未确认端点。
+func (s *BadgeService) GetGuildBadges(context.Context, string) ([]Badge, error) {
+	return nil, unsupportedEndpoint("badge/guild")
+}
+
 // BadgeStyle Badge 展示样式。
 type BadgeStyle int
 

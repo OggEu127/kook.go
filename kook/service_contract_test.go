@@ -101,7 +101,7 @@ func TestOfficialServiceContracts(t *testing.T) {
 			defer server.Close()
 
 			client := NewClient("contract-token", WithBaseURL(server.URL+"/api"), WithoutRateLimit(), WithoutRetry())
-			defer client.Close()
+			defer func() { _ = client.Close() }()
 			require.NoError(t, contract.Invoke(context.Background(), client, server.URL))
 		})
 	}
