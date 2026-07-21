@@ -49,7 +49,7 @@ func requireKOOKIntegrationEnv(t *testing.T) map[string]string {
 func TestKOOKReadOnlyIntegration(t *testing.T) {
 	env := requireKOOKIntegrationEnv(t)
 	client := NewClient(env["KOOK_TOKEN"])
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
@@ -179,7 +179,7 @@ func TestKOOKMutationIntegration(t *testing.T) {
 	}
 	env := requireKOOKIntegrationEnv(t)
 	client := NewClient(env["KOOK_TOKEN"])
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 

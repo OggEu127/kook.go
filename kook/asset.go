@@ -14,6 +14,16 @@ type AssetService struct {
 	client *Client
 }
 
+// UploadFile 是 CreateFromPath 的 v1.1.1 兼容别名。
+func (s *AssetService) UploadFile(ctx context.Context, filePath string) (*Asset, error) {
+	return s.CreateFromPath(ctx, AssetPathParams{Path: filePath})
+}
+
+// UploadFileContent 是 Create 的 v1.1.1 兼容别名。
+func (s *AssetService) UploadFileContent(ctx context.Context, fileName string, content []byte) (*Asset, error) {
+	return s.Create(ctx, AssetCreateParams{FileName: fileName, Content: content})
+}
+
 type AssetPathParams struct {
 	Path string
 }
@@ -28,7 +38,7 @@ func (s *AssetService) CreateFromPath(ctx context.Context, params AssetPathParam
 	if err != nil {
 		return nil, fmt.Errorf("打开文件失败: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	fileContent, err := io.ReadAll(file)
 	if err != nil {
@@ -55,7 +65,6 @@ func (s *AssetService) Create(ctx context.Context, params AssetCreateParams) (*A
 		return nil, fmt.Errorf("文件内容不能为空")
 	}
 
-	s.client.logger.Debugf("上传文件: %s", params.FileName)
 	response, err := s.client.doMultipartRequest(ctx, "asset/create", nil, map[string]multipartFile{
 		"file": {
 			FileName: params.FileName,
@@ -71,11 +80,13 @@ func (s *AssetService) Create(ctx context.Context, params AssetCreateParams) (*A
 		return nil, fmt.Errorf("解析资源信息失败: %w", err)
 	}
 
-	s.client.logger.Infof("文件上传成功: %s -> %s", params.FileName, asset.URL)
 	return &asset, nil
 }
 
 // Asset 媒体资源信息。
 type Asset struct {
-	URL string `json:"url"`
+	URL  string `json:"url"`
+	Type string `json:"type"`
+	Name string `json:"name"`
+	Size int64  `json:"size"`
 }

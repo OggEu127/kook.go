@@ -16,7 +16,17 @@ type IntimacyViewParams struct {
 }
 
 // GetIntimacy 获取用户亲密度。
-func (s *IntimacyService) GetIntimacy(ctx context.Context, params IntimacyViewParams) (*Intimacy, error) {
+func (s *IntimacyService) GetIntimacy(ctx context.Context, args ...any) (*Intimacy, error) {
+	params, err := compatParams("GetIntimacy", args, func(args []any) (IntimacyViewParams, bool) {
+		if len(args) != 1 {
+			return IntimacyViewParams{}, false
+		}
+		userID, ok := compatString(args[0])
+		return IntimacyViewParams{UserID: userID}, ok
+	})
+	if err != nil {
+		return nil, err
+	}
 	if params.UserID == "" {
 		return nil, fmt.Errorf("用户ID不能为空")
 	}
@@ -39,7 +49,20 @@ func (s *IntimacyService) GetIntimacy(ctx context.Context, params IntimacyViewPa
 }
 
 // UpdateIntimacy 更新用户亲密度。
-func (s *IntimacyService) UpdateIntimacy(ctx context.Context, params UpdateIntimacyParams) error {
+func (s *IntimacyService) UpdateIntimacy(ctx context.Context, args ...any) error {
+	params, err := compatParams("UpdateIntimacy", args, func(args []any) (UpdateIntimacyParams, bool) {
+		if len(args) != 4 {
+			return UpdateIntimacyParams{}, false
+		}
+		userID, okUser := compatString(args[0])
+		score, okScore := compatInt(args[1])
+		socialInfo, okSocial := compatString(args[2])
+		imgID, okImg := compatString(args[3])
+		return UpdateIntimacyParams{UserID: userID, Score: &score, SocialInfo: stringPointer(socialInfo), ImgID: stringPointer(imgID)}, okUser && okScore && okSocial && okImg
+	})
+	if err != nil {
+		return err
+	}
 	if params.UserID == "" {
 		return fmt.Errorf("用户ID不能为空")
 	}
@@ -58,8 +81,16 @@ func (s *IntimacyService) UpdateIntimacy(ctx context.Context, params UpdateIntim
 		body["img_id"] = *params.ImgID
 	}
 
-	_, err := s.client.Post(ctx, "intimacy/update", body)
+	_, err = s.client.Post(ctx, "intimacy/update", body)
 	return err
+}
+
+// UpdateIntimacyLegacy 提供 v1.1.1 的返回值形状。
+func (s *IntimacyService) UpdateIntimacyLegacy(ctx context.Context, userID string, score int, socialInfo, imgID string) (*Intimacy, error) {
+	if err := s.UpdateIntimacy(ctx, userID, score, socialInfo, imgID); err != nil {
+		return nil, err
+	}
+	return &Intimacy{UserID: userID, Score: score, SocialInfo: socialInfo, ImgID: imgID}, nil
 }
 
 // 数据结构定义

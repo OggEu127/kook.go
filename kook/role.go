@@ -13,7 +13,19 @@ type RoleService struct {
 }
 
 // GetRoleList 获取服务器角色列表
-func (s *RoleService) GetRoleList(ctx context.Context, params RoleListParams) (*ListRolesResponse, error) {
+func (s *RoleService) GetRoleList(ctx context.Context, args ...any) (*ListRolesResponse, error) {
+	params, err := compatParams("GetRoleList", args, func(args []any) (RoleListParams, bool) {
+		if len(args) != 3 {
+			return RoleListParams{}, false
+		}
+		guildID, ok1 := compatString(args[0])
+		page, ok2 := compatInt(args[1])
+		pageSize, ok3 := compatInt(args[2])
+		return RoleListParams{GuildID: guildID, Page: optionalPositiveInt(page), PageSize: optionalPositiveInt(pageSize)}, ok1 && ok2 && ok3
+	})
+	if err != nil {
+		return nil, err
+	}
 	if params.GuildID == "" {
 		return nil, fmt.Errorf("服务器ID不能为空")
 	}
@@ -43,7 +55,18 @@ func (s *RoleService) GetRoleList(ctx context.Context, params RoleListParams) (*
 }
 
 // CreateRole 创建服务器角色
-func (s *RoleService) CreateRole(ctx context.Context, params CreateRoleParams) (*GuildRole, error) {
+func (s *RoleService) CreateRole(ctx context.Context, args ...any) (*GuildRole, error) {
+	params, err := compatParams("CreateRole", args, func(args []any) (CreateRoleParams, bool) {
+		if len(args) != 2 {
+			return CreateRoleParams{}, false
+		}
+		guildID, ok1 := compatString(args[0])
+		name, ok2 := compatString(args[1])
+		return CreateRoleParams{GuildID: guildID, Name: stringPointer(name)}, ok1 && ok2
+	})
+	if err != nil {
+		return nil, err
+	}
 	if params.GuildID == "" {
 		return nil, fmt.Errorf("服务器ID不能为空")
 	}
@@ -65,7 +88,21 @@ func (s *RoleService) CreateRole(ctx context.Context, params CreateRoleParams) (
 }
 
 // UpdateRole 更新服务器角色
-func (s *RoleService) UpdateRole(ctx context.Context, params UpdateRoleParams) (*GuildRole, error) {
+func (s *RoleService) UpdateRole(ctx context.Context, args ...any) (*GuildRole, error) {
+	params, err := compatParams("UpdateRole", args, func(args []any) (UpdateRoleParams, bool) {
+		if len(args) != 3 {
+			return UpdateRoleParams{}, false
+		}
+		guildID, ok1 := compatString(args[0])
+		roleID, ok2 := compatInt(args[1])
+		value, ok3 := args[2].(UpdateRoleParams)
+		value.GuildID = guildID
+		value.RoleID = roleID
+		return value, ok1 && ok2 && ok3
+	})
+	if err != nil {
+		return nil, err
+	}
 	if params.GuildID == "" {
 		return nil, fmt.Errorf("服务器ID不能为空")
 	}
@@ -103,7 +140,18 @@ func (s *RoleService) UpdateRole(ctx context.Context, params UpdateRoleParams) (
 }
 
 // DeleteRole 删除服务器角色
-func (s *RoleService) DeleteRole(ctx context.Context, params DeleteRoleParams) error {
+func (s *RoleService) DeleteRole(ctx context.Context, args ...any) error {
+	params, err := compatParams("DeleteRole", args, func(args []any) (DeleteRoleParams, bool) {
+		if len(args) != 2 {
+			return DeleteRoleParams{}, false
+		}
+		guildID, ok1 := compatString(args[0])
+		roleID, ok2 := compatInt(args[1])
+		return DeleteRoleParams{GuildID: guildID, RoleID: roleID}, ok1 && ok2
+	})
+	if err != nil {
+		return err
+	}
 	if params.GuildID == "" {
 		return fmt.Errorf("服务器ID不能为空")
 	}
@@ -116,12 +164,24 @@ func (s *RoleService) DeleteRole(ctx context.Context, params DeleteRoleParams) e
 		"role_id":  params.RoleID,
 	}
 
-	_, err := s.client.Post(ctx, "guild-role/delete", body)
+	_, err = s.client.Post(ctx, "guild-role/delete", body)
 	return err
 }
 
 // GrantRole 赋予用户角色
-func (s *RoleService) GrantRole(ctx context.Context, params GrantRoleParams) (*UserRoleResponse, error) {
+func (s *RoleService) GrantRole(ctx context.Context, args ...any) (*UserRoleResponse, error) {
+	params, err := compatParams("GrantRole", args, func(args []any) (GrantRoleParams, bool) {
+		if len(args) != 3 {
+			return GrantRoleParams{}, false
+		}
+		guildID, ok1 := compatString(args[0])
+		userID, ok2 := compatString(args[1])
+		roleID, ok3 := compatInt(args[2])
+		return GrantRoleParams{GuildID: guildID, UserID: userID, RoleID: roleID}, ok1 && ok2 && ok3
+	})
+	if err != nil {
+		return nil, err
+	}
 	if params.GuildID == "" {
 		return nil, fmt.Errorf("服务器ID不能为空")
 	}
@@ -152,7 +212,19 @@ func (s *RoleService) GrantRole(ctx context.Context, params GrantRoleParams) (*U
 }
 
 // RevokeRole 删除用户角色
-func (s *RoleService) RevokeRole(ctx context.Context, params RevokeRoleParams) (*UserRoleResponse, error) {
+func (s *RoleService) RevokeRole(ctx context.Context, args ...any) (*UserRoleResponse, error) {
+	params, err := compatParams("RevokeRole", args, func(args []any) (RevokeRoleParams, bool) {
+		if len(args) != 3 {
+			return RevokeRoleParams{}, false
+		}
+		guildID, ok1 := compatString(args[0])
+		userID, ok2 := compatString(args[1])
+		roleID, ok3 := compatInt(args[2])
+		return RevokeRoleParams{GuildID: guildID, UserID: userID, RoleID: roleID}, ok1 && ok2 && ok3
+	})
+	if err != nil {
+		return nil, err
+	}
 	if params.GuildID == "" {
 		return nil, fmt.Errorf("服务器ID不能为空")
 	}

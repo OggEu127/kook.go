@@ -12,7 +12,17 @@ type VoiceService struct {
 }
 
 // JoinVoiceChannel 加入语音频道。
-func (s *VoiceService) JoinVoiceChannel(ctx context.Context, params VoiceJoinParams) (*VoiceConnectionInfo, error) {
+func (s *VoiceService) JoinVoiceChannel(ctx context.Context, args ...any) (*VoiceConnectionInfo, error) {
+	params, err := compatParams("JoinVoiceChannel", args, func(args []any) (VoiceJoinParams, bool) {
+		if len(args) != 1 {
+			return VoiceJoinParams{}, false
+		}
+		channelID, ok := compatString(args[0])
+		return VoiceJoinParams{ChannelID: channelID}, ok
+	})
+	if err != nil {
+		return nil, err
+	}
 	if params.ChannelID == "" {
 		return nil, fmt.Errorf("频道ID不能为空")
 	}
@@ -35,7 +45,17 @@ type VoiceLeaveParams struct {
 }
 
 // LeaveVoiceChannel 离开语音频道。
-func (s *VoiceService) LeaveVoiceChannel(ctx context.Context, params VoiceLeaveParams) error {
+func (s *VoiceService) LeaveVoiceChannel(ctx context.Context, args ...any) error {
+	params, err := compatParams("LeaveVoiceChannel", args, func(args []any) (VoiceLeaveParams, bool) {
+		if len(args) != 1 {
+			return VoiceLeaveParams{}, false
+		}
+		channelID, ok := compatString(args[0])
+		return VoiceLeaveParams{ChannelID: channelID}, ok
+	})
+	if err != nil {
+		return err
+	}
 	if params.ChannelID == "" {
 		return fmt.Errorf("频道ID不能为空")
 	}
@@ -44,7 +64,7 @@ func (s *VoiceService) LeaveVoiceChannel(ctx context.Context, params VoiceLeaveP
 		"channel_id": params.ChannelID,
 	}
 
-	_, err := s.client.Post(ctx, "voice/leave", body)
+	_, err = s.client.Post(ctx, "voice/leave", body)
 	return err
 }
 
@@ -67,7 +87,17 @@ type VoiceKeepAliveParams struct {
 }
 
 // KeepAliveVoiceChannel 续期语音频道占用。
-func (s *VoiceService) KeepAliveVoiceChannel(ctx context.Context, params VoiceKeepAliveParams) error {
+func (s *VoiceService) KeepAliveVoiceChannel(ctx context.Context, args ...any) error {
+	params, err := compatParams("KeepAliveVoiceChannel", args, func(args []any) (VoiceKeepAliveParams, bool) {
+		if len(args) != 1 {
+			return VoiceKeepAliveParams{}, false
+		}
+		channelID, ok := compatString(args[0])
+		return VoiceKeepAliveParams{ChannelID: channelID}, ok
+	})
+	if err != nil {
+		return err
+	}
 	if params.ChannelID == "" {
 		return fmt.Errorf("频道ID不能为空")
 	}
@@ -76,8 +106,39 @@ func (s *VoiceService) KeepAliveVoiceChannel(ctx context.Context, params VoiceKe
 		"channel_id": params.ChannelID,
 	}
 
-	_, err := s.client.Post(ctx, "voice/keep-alive", body)
+	_, err = s.client.Post(ctx, "voice/keep-alive", body)
 	return err
+}
+
+// GetVoiceChannelUsers 是 v1.1.1 兼容入口。官方文档未确认该端点。
+func (s *VoiceService) GetVoiceChannelUsers(context.Context, string) ([]VoiceUser, error) {
+	return nil, unsupportedEndpoint("voice/users")
+}
+
+func (s *VoiceService) MuteUser(context.Context, string, string) error {
+	return unsupportedEndpoint("voice/mute")
+}
+
+func (s *VoiceService) UnmuteUser(context.Context, string, string) error {
+	return unsupportedEndpoint("voice/unmute")
+}
+
+func (s *VoiceService) DeafenUser(context.Context, string, string) error {
+	return unsupportedEndpoint("voice/deafen")
+}
+
+func (s *VoiceService) UndeafenUser(context.Context, string, string) error {
+	return unsupportedEndpoint("voice/undeafen")
+}
+
+// VoiceUser 保留 v1.1.1 的语音成员数据结构。
+type VoiceUser struct {
+	User         User `json:"user"`
+	Muted        bool `json:"muted"`
+	Deafened     bool `json:"deafened"`
+	SelfMuted    bool `json:"self_muted"`
+	SelfDeafened bool `json:"self_deafened"`
+	Speaking     bool `json:"speaking"`
 }
 
 // 数据结构定义

@@ -19,7 +19,19 @@ type BlacklistListParams struct {
 }
 
 // GetBlacklistUsers 获取屏蔽用户列表。
-func (s *BlacklistService) GetBlacklistUsers(ctx context.Context, params BlacklistListParams) (*BlacklistResponse, error) {
+func (s *BlacklistService) GetBlacklistUsers(ctx context.Context, args ...any) (*BlacklistResponse, error) {
+	params, err := compatParams("GetBlacklistUsers", args, func(args []any) (BlacklistListParams, bool) {
+		if len(args) != 3 {
+			return BlacklistListParams{}, false
+		}
+		guildID, okGuild := compatString(args[0])
+		page, okPage := compatInt(args[1])
+		pageSize, okPageSize := compatInt(args[2])
+		return BlacklistListParams{GuildID: guildID, Page: optionalPositiveInt(page), PageSize: optionalPositiveInt(pageSize)}, okGuild && okPage && okPageSize
+	})
+	if err != nil {
+		return nil, err
+	}
 	if params.GuildID == "" {
 		return nil, fmt.Errorf("服务器ID不能为空")
 	}
@@ -56,7 +68,20 @@ type BlacklistCreateParams struct {
 }
 
 // CreateBlacklistUser 屏蔽用户。
-func (s *BlacklistService) CreateBlacklistUser(ctx context.Context, params BlacklistCreateParams) error {
+func (s *BlacklistService) CreateBlacklistUser(ctx context.Context, args ...any) error {
+	params, err := compatParams("CreateBlacklistUser", args, func(args []any) (BlacklistCreateParams, bool) {
+		if len(args) != 4 {
+			return BlacklistCreateParams{}, false
+		}
+		guildID, okGuild := compatString(args[0])
+		userID, okUser := compatString(args[1])
+		remark, okRemark := compatString(args[2])
+		days, okDays := compatInt(args[3])
+		return BlacklistCreateParams{GuildID: guildID, TargetID: userID, Remark: remark, DelMsgDays: &days}, okGuild && okUser && okRemark && okDays
+	})
+	if err != nil {
+		return err
+	}
 	if params.GuildID == "" {
 		return fmt.Errorf("服务器ID不能为空")
 	}
@@ -76,7 +101,7 @@ func (s *BlacklistService) CreateBlacklistUser(ctx context.Context, params Black
 		body["del_msg_days"] = *params.DelMsgDays
 	}
 
-	_, err := s.client.Post(ctx, "blacklist/create", body)
+	_, err = s.client.Post(ctx, "blacklist/create", body)
 	return err
 }
 
@@ -86,7 +111,18 @@ type BlacklistDeleteParams struct {
 }
 
 // DeleteBlacklistUser 取消屏蔽用户。
-func (s *BlacklistService) DeleteBlacklistUser(ctx context.Context, params BlacklistDeleteParams) error {
+func (s *BlacklistService) DeleteBlacklistUser(ctx context.Context, args ...any) error {
+	params, err := compatParams("DeleteBlacklistUser", args, func(args []any) (BlacklistDeleteParams, bool) {
+		if len(args) != 2 {
+			return BlacklistDeleteParams{}, false
+		}
+		guildID, okGuild := compatString(args[0])
+		userID, okUser := compatString(args[1])
+		return BlacklistDeleteParams{GuildID: guildID, TargetID: userID}, okGuild && okUser
+	})
+	if err != nil {
+		return err
+	}
 	if params.GuildID == "" {
 		return fmt.Errorf("服务器ID不能为空")
 	}
@@ -99,7 +135,7 @@ func (s *BlacklistService) DeleteBlacklistUser(ctx context.Context, params Black
 		"target_id": params.TargetID,
 	}
 
-	_, err := s.client.Post(ctx, "blacklist/delete", body)
+	_, err = s.client.Post(ctx, "blacklist/delete", body)
 	return err
 }
 
@@ -111,6 +147,8 @@ type BlacklistUser struct {
 	Remark      string `json:"remark"`
 	UserID      string `json:"user_id"`
 	CreatedTime int64  `json:"created_time"`
+	CreatedAt   int64  `json:"created_at"`
+	UpdatedAt   int64  `json:"updated_at"`
 }
 
 // BlacklistResponse 屏蔽用户列表响应

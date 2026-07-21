@@ -174,7 +174,7 @@ func TestEventDispatcherContainsHandlerPanics(t *testing.T) {
 	dispatcher.onMessage(MessageTypeText, func(*MessageEvent) { safeCalls.Add(1) })
 
 	event := &Event{Type: MessageTypeText, Content: json.RawMessage(`"hello"`)}
-	require.NoError(t, dispatcher.dispatch(event, func(any) { panicCalls.Add(1) }))
+	require.ErrorIs(t, dispatcher.dispatch(event, func(any) { panicCalls.Add(1) }), ErrEventHandlerPanic)
 	require.Equal(t, int32(1), panicCalls.Load())
 	require.Equal(t, int32(1), safeCalls.Load())
 }

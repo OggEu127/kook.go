@@ -13,7 +13,20 @@ type ChannelService struct {
 }
 
 // GetChannelList 获取频道列表
-func (s *ChannelService) GetChannelList(ctx context.Context, params ChannelListParams) (*ListChannelsResponse, error) {
+func (s *ChannelService) GetChannelList(ctx context.Context, args ...any) (*ListChannelsResponse, error) {
+	params, err := compatParams("GetChannelList", args, func(args []any) (ChannelListParams, bool) {
+		if len(args) != 4 {
+			return ChannelListParams{}, false
+		}
+		guildID, okGuild := compatString(args[0])
+		page, okPage := compatInt(args[1])
+		pageSize, okPageSize := compatInt(args[2])
+		_, okSort := compatString(args[3])
+		return ChannelListParams{GuildID: guildID, Page: optionalPositiveInt(page), PageSize: optionalPositiveInt(pageSize)}, okGuild && okPage && okPageSize && okSort
+	})
+	if err != nil {
+		return nil, err
+	}
 	if params.GuildID == "" {
 		return nil, fmt.Errorf("服务器ID不能为空")
 	}
@@ -59,7 +72,19 @@ func (s *ChannelService) View(ctx context.Context, params ChannelViewParams) (*C
 }
 
 // CreateChannel 创建频道
-func (s *ChannelService) CreateChannel(ctx context.Context, params CreateChannelParams) (*Channel, error) {
+func (s *ChannelService) CreateChannel(ctx context.Context, args ...any) (*Channel, error) {
+	params, err := compatParams("CreateChannel", args, func(args []any) (CreateChannelParams, bool) {
+		if len(args) != 2 {
+			return CreateChannelParams{}, false
+		}
+		guildID, okGuild := compatString(args[0])
+		params, okParams := args[1].(CreateChannelParams)
+		params.GuildID = guildID
+		return params, okGuild && okParams
+	})
+	if err != nil {
+		return nil, err
+	}
 	if params.GuildID == "" {
 		return nil, fmt.Errorf("服务器ID不能为空")
 	}
@@ -118,7 +143,19 @@ func (s *ChannelService) CreateChannel(ctx context.Context, params CreateChannel
 }
 
 // UpdateChannel 更新频道信息
-func (s *ChannelService) UpdateChannel(ctx context.Context, params UpdateChannelParams) (*Channel, error) {
+func (s *ChannelService) UpdateChannel(ctx context.Context, args ...any) (*Channel, error) {
+	params, err := compatParams("UpdateChannel", args, func(args []any) (UpdateChannelParams, bool) {
+		if len(args) != 2 {
+			return UpdateChannelParams{}, false
+		}
+		channelID, okChannel := compatString(args[0])
+		params, okParams := args[1].(UpdateChannelParams)
+		params.ChannelID = channelID
+		return params, okChannel && okParams
+	})
+	if err != nil {
+		return nil, err
+	}
 	if params.ChannelID == "" {
 		return nil, fmt.Errorf("频道ID不能为空")
 	}
@@ -166,7 +203,17 @@ func (s *ChannelService) UpdateChannel(ctx context.Context, params UpdateChannel
 }
 
 // DeleteChannel 删除频道
-func (s *ChannelService) DeleteChannel(ctx context.Context, params ChannelDeleteParams) error {
+func (s *ChannelService) DeleteChannel(ctx context.Context, args ...any) error {
+	params, err := compatParams("DeleteChannel", args, func(args []any) (ChannelDeleteParams, bool) {
+		if len(args) != 1 {
+			return ChannelDeleteParams{}, false
+		}
+		channelID, ok := compatString(args[0])
+		return ChannelDeleteParams{ChannelID: channelID}, ok
+	})
+	if err != nil {
+		return err
+	}
 	if params.ChannelID == "" {
 		return fmt.Errorf("频道ID不能为空")
 	}
@@ -175,12 +222,23 @@ func (s *ChannelService) DeleteChannel(ctx context.Context, params ChannelDelete
 		"channel_id": params.ChannelID,
 	}
 
-	_, err := s.client.Post(ctx, "channel/delete", body)
+	_, err = s.client.Post(ctx, "channel/delete", body)
 	return err
 }
 
 // MoveUsers 移动用户到语音频道
-func (s *ChannelService) MoveUsers(ctx context.Context, params ChannelMoveUserParams) error {
+func (s *ChannelService) MoveUsers(ctx context.Context, args ...any) error {
+	params, err := compatParams("MoveUsers", args, func(args []any) (ChannelMoveUserParams, bool) {
+		if len(args) != 2 {
+			return ChannelMoveUserParams{}, false
+		}
+		channelID, okChannel := compatString(args[0])
+		userIDs, okUsers := args[1].([]string)
+		return ChannelMoveUserParams{TargetID: channelID, UserIDs: userIDs}, okChannel && okUsers
+	})
+	if err != nil {
+		return err
+	}
 	if params.TargetID == "" {
 		return fmt.Errorf("频道ID不能为空")
 	}
@@ -198,12 +256,22 @@ func (s *ChannelService) MoveUsers(ctx context.Context, params ChannelMoveUserPa
 		"user_ids":  params.UserIDs,
 	}
 
-	_, err := s.client.Post(ctx, "channel/move-user", body)
+	_, err = s.client.Post(ctx, "channel/move-user", body)
 	return err
 }
 
 // GetChannelRole 获取频道角色权限详情
-func (s *ChannelService) GetChannelRole(ctx context.Context, params ChannelRoleViewParams) (*ChannelRoleResponse, error) {
+func (s *ChannelService) GetChannelRole(ctx context.Context, args ...any) (*ChannelRoleResponse, error) {
+	params, err := compatParams("GetChannelRole", args, func(args []any) (ChannelRoleViewParams, bool) {
+		if len(args) != 1 {
+			return ChannelRoleViewParams{}, false
+		}
+		channelID, ok := compatString(args[0])
+		return ChannelRoleViewParams{ChannelID: channelID}, ok
+	})
+	if err != nil {
+		return nil, err
+	}
 	if params.ChannelID == "" {
 		return nil, fmt.Errorf("频道ID不能为空")
 	}
@@ -226,7 +294,18 @@ func (s *ChannelService) GetChannelRole(ctx context.Context, params ChannelRoleV
 }
 
 // KickoutUser 踢出语音频道用户
-func (s *ChannelService) KickoutUser(ctx context.Context, params ChannelKickoutParams) error {
+func (s *ChannelService) KickoutUser(ctx context.Context, args ...any) error {
+	params, err := compatParams("KickoutUser", args, func(args []any) (ChannelKickoutParams, bool) {
+		if len(args) != 2 {
+			return ChannelKickoutParams{}, false
+		}
+		channelID, okChannel := compatString(args[0])
+		userID, okUser := compatString(args[1])
+		return ChannelKickoutParams{ChannelID: channelID, UserID: userID}, okChannel && okUser
+	})
+	if err != nil {
+		return err
+	}
 	if params.ChannelID == "" {
 		return fmt.Errorf("频道ID不能为空")
 	}
@@ -239,12 +318,22 @@ func (s *ChannelService) KickoutUser(ctx context.Context, params ChannelKickoutP
 		"user_id":    params.UserID,
 	}
 
-	_, err := s.client.Post(ctx, "channel/kickout", body)
+	_, err = s.client.Post(ctx, "channel/kickout", body)
 	return err
 }
 
 // GetChannelUserList 获取频道内用户列表
-func (s *ChannelService) GetChannelUserList(ctx context.Context, params ChannelUserListParams) ([]User, error) {
+func (s *ChannelService) GetChannelUserList(ctx context.Context, args ...any) ([]User, error) {
+	params, err := compatParams("GetChannelUserList", args, func(args []any) (ChannelUserListParams, bool) {
+		if len(args) != 1 {
+			return ChannelUserListParams{}, false
+		}
+		channelID, ok := compatString(args[0])
+		return ChannelUserListParams{ChannelID: channelID}, ok
+	})
+	if err != nil {
+		return nil, err
+	}
 	if params.ChannelID == "" {
 		return nil, fmt.Errorf("频道ID不能为空")
 	}
@@ -267,7 +356,17 @@ func (s *ChannelService) GetChannelUserList(ctx context.Context, params ChannelU
 }
 
 // SyncChannelRole 同步频道权限
-func (s *ChannelService) SyncChannelRole(ctx context.Context, params ChannelRoleSyncParams) (*ChannelRoleResponse, error) {
+func (s *ChannelService) SyncChannelRole(ctx context.Context, args ...any) (*ChannelRoleResponse, error) {
+	params, err := compatParams("SyncChannelRole", args, func(args []any) (ChannelRoleSyncParams, bool) {
+		if len(args) != 1 {
+			return ChannelRoleSyncParams{}, false
+		}
+		channelID, ok := compatString(args[0])
+		return ChannelRoleSyncParams{ChannelID: channelID}, ok
+	})
+	if err != nil {
+		return nil, err
+	}
 	if params.ChannelID == "" {
 		return nil, fmt.Errorf("频道ID不能为空")
 	}
@@ -290,7 +389,17 @@ func (s *ChannelService) SyncChannelRole(ctx context.Context, params ChannelRole
 }
 
 // CreateChannelRole 创建频道角色权限
-func (s *ChannelService) CreateChannelRole(ctx context.Context, params CreateChannelRoleParams) (*ChannelPermissionOverwrite, error) {
+func (s *ChannelService) CreateChannelRole(ctx context.Context, args ...any) (*ChannelPermissionOverwrite, error) {
+	params, err := compatParams("CreateChannelRole", args, func(args []any) (CreateChannelRoleParams, bool) {
+		if len(args) != 1 {
+			return CreateChannelRoleParams{}, false
+		}
+		legacy, ok := args[0].(ChannelRoleParams)
+		return CreateChannelRoleParams{ChannelID: legacy.ChannelID, Type: legacy.Type, Value: legacy.Value}, ok
+	})
+	if err != nil {
+		return nil, err
+	}
 	if params.ChannelID == "" {
 		return nil, fmt.Errorf("频道ID不能为空")
 	}
@@ -310,7 +419,17 @@ func (s *ChannelService) CreateChannelRole(ctx context.Context, params CreateCha
 }
 
 // UpdateChannelRole 更新频道角色权限
-func (s *ChannelService) UpdateChannelRole(ctx context.Context, params UpdateChannelRoleParams) (*ChannelPermissionOverwrite, error) {
+func (s *ChannelService) UpdateChannelRole(ctx context.Context, args ...any) (*ChannelPermissionOverwrite, error) {
+	params, err := compatParams("UpdateChannelRole", args, func(args []any) (UpdateChannelRoleParams, bool) {
+		if len(args) != 1 {
+			return UpdateChannelRoleParams{}, false
+		}
+		legacy, ok := args[0].(ChannelRoleParams)
+		return UpdateChannelRoleParams{ChannelID: legacy.ChannelID, Type: legacy.Type, Value: legacy.Value, Allow: &legacy.Allow, Deny: &legacy.Deny}, ok
+	})
+	if err != nil {
+		return nil, err
+	}
 	if params.ChannelID == "" {
 		return nil, fmt.Errorf("频道ID不能为空")
 	}
@@ -330,7 +449,19 @@ func (s *ChannelService) UpdateChannelRole(ctx context.Context, params UpdateCha
 }
 
 // DeleteChannelRole 删除频道角色权限
-func (s *ChannelService) DeleteChannelRole(ctx context.Context, params DeleteChannelRoleParams) error {
+func (s *ChannelService) DeleteChannelRole(ctx context.Context, args ...any) error {
+	params, err := compatParams("DeleteChannelRole", args, func(args []any) (DeleteChannelRoleParams, bool) {
+		if len(args) != 3 {
+			return DeleteChannelRoleParams{}, false
+		}
+		channelID, okChannel := compatString(args[0])
+		overwriteType, okType := compatString(args[1])
+		value, okValue := compatString(args[2])
+		return DeleteChannelRoleParams{ChannelID: channelID, Type: overwriteType, Value: value}, okChannel && okType && okValue
+	})
+	if err != nil {
+		return err
+	}
 	if params.ChannelID == "" {
 		return fmt.Errorf("频道ID不能为空")
 	}
@@ -345,8 +476,33 @@ func (s *ChannelService) DeleteChannelRole(ctx context.Context, params DeleteCha
 		body["value"] = params.Value
 	}
 
-	_, err := s.client.Post(ctx, "channel-role/delete", body)
+	_, err = s.client.Post(ctx, "channel-role/delete", body)
 	return err
+}
+
+// GetChannelInfo 是 View 的 v1.1.1 兼容别名。
+func (s *ChannelService) GetChannelInfo(ctx context.Context, channelID string) (*Channel, error) {
+	return s.View(ctx, ChannelViewParams{TargetID: channelID})
+}
+
+func (s *ChannelService) MoveChannel(context.Context, string, []string) error {
+	return unsupportedEndpoint("channel/move")
+}
+
+func (s *ChannelService) KickoutFromVoiceChannel(ctx context.Context, channelID, userID string) error {
+	return s.KickoutUser(ctx, channelID, userID)
+}
+
+func (s *ChannelService) MoveUser(ctx context.Context, channelID, userID string) error {
+	return s.MoveUsers(ctx, channelID, []string{userID})
+}
+
+func (s *ChannelService) GetJoinedChannels(ctx context.Context, guildID, userID string) ([]Channel, error) {
+	result, err := (&ChannelUserService{client: s.client}).GetJoinedChannels(ctx, JoinedChannelParams{GuildID: guildID, UserID: userID})
+	if err != nil {
+		return nil, err
+	}
+	return result.Items, nil
 }
 
 // CreateChannelParams 创建频道参数
@@ -493,6 +649,15 @@ type DeleteChannelRoleParams struct {
 	ChannelID string
 	Type      string
 	Value     string
+}
+
+// ChannelRoleParams 保留 v1.1.1 的合并创建/更新权限参数。
+type ChannelRoleParams struct {
+	ChannelID string `json:"channel_id"`
+	Type      string `json:"type,omitempty"`
+	Value     string `json:"value,omitempty"`
+	Allow     int    `json:"allow,omitempty"`
+	Deny      int    `json:"deny,omitempty"`
 }
 
 // ChannelPermissionOverwrite 频道权限覆写结果

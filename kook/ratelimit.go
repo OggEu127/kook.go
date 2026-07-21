@@ -2,7 +2,9 @@ package kook
 
 import (
 	"context"
+	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -15,12 +17,28 @@ type RateLimiter struct {
 	burst      int
 	done       chan struct{}
 	closeOnce  sync.Once
+	closed     atomic.Bool
 }
 
 // NewRateLimiter 创建新的速率限制器
 // rate: 令牌补充间隔
 // burst: 令牌桶容量
 func NewRateLimiter(rate time.Duration, burst int) *RateLimiter {
+	rl, err := NewRateLimiterWithError(rate, burst)
+	if err != nil {
+		panic(err)
+	}
+	return rl
+}
+
+// NewRateLimiterWithError 创建新的速率限制器，并返回配置错误。
+func NewRateLimiterWithError(rate time.Duration, burst int) (*RateLimiter, error) {
+	if rate <= 0 {
+		return nil, fmt.Errorf("rate必须大于0")
+	}
+	if burst <= 0 {
+		return nil, fmt.Errorf("burst必须大于0")
+	}
 	rl := &RateLimiter{
 		tokens:     make(chan struct{}, burst),
 		lastRefill: time.Now(),
@@ -40,14 +58,19 @@ func NewRateLimiter(rate time.Duration, burst int) *RateLimiter {
 	// 启动令牌补充协程
 	go rl.refillLoop()
 
-	return rl
+	return rl, nil
 }
 
 // Wait 等待获取令牌
 func (rl *RateLimiter) Wait(ctx context.Context) error {
+	if rl == nil || rl.closed.Load() {
+		return ErrRateLimiterClosed
+	}
 	select {
 	case <-rl.tokens:
 		return nil
+	case <-rl.done:
+		return ErrRateLimiterClosed
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -55,6 +78,9 @@ func (rl *RateLimiter) Wait(ctx context.Context) error {
 
 // TryAcquire 尝试获取令牌，不等待
 func (rl *RateLimiter) TryAcquire() bool {
+	if rl == nil || rl.closed.Load() {
+		return false
+	}
 	select {
 	case <-rl.tokens:
 		return true
@@ -65,6 +91,9 @@ func (rl *RateLimiter) TryAcquire() bool {
 
 // Release 归还已获取的令牌。
 func (rl *RateLimiter) Release() {
+	if rl == nil || rl.closed.Load() {
+		return
+	}
 	select {
 	case rl.tokens <- struct{}{}:
 	default:
@@ -73,7 +102,11 @@ func (rl *RateLimiter) Release() {
 
 // Close 停止令牌补充协程。
 func (rl *RateLimiter) Close() {
+	if rl == nil {
+		return
+	}
 	rl.closeOnce.Do(func() {
+		rl.closed.Store(true)
 		close(rl.done)
 	})
 }
@@ -108,78 +141,143 @@ type EndpointRateLimiter struct {
 	mu       sync.RWMutex
 	rate     time.Duration
 	burst    int
+	closed   atomic.Bool
 }
 
 // NewEndpointRateLimiter 创建端点级别的速率限制器
 func NewEndpointRateLimiter(rate time.Duration, burst int) *EndpointRateLimiter {
+	limiter, err := NewEndpointRateLimiterWithError(rate, burst)
+	if err != nil {
+		panic(err)
+	}
+	return limiter
+}
+
+// NewEndpointRateLimiterWithError 创建经过参数校验的端点限流器。
+func NewEndpointRateLimiterWithError(rate time.Duration, burst int) (*EndpointRateLimiter, error) {
+	if rate <= 0 {
+		return nil, fmt.Errorf("rate必须大于0")
+	}
+	if burst <= 0 {
+		return nil, fmt.Errorf("burst必须大于0")
+	}
 	return &EndpointRateLimiter{
 		limiters: make(map[string]*RateLimiter),
 		rate:     rate,
 		burst:    burst,
-	}
+	}, nil
 }
 
 // Wait 等待指定端点的令牌
 func (erl *EndpointRateLimiter) Wait(ctx context.Context, endpoint string) error {
-	return erl.getLimiter(endpoint).Wait(ctx)
+	limiter, err := erl.getLimiter(endpoint)
+	if err != nil {
+		return err
+	}
+	return limiter.Wait(ctx)
 }
 
 // TryAcquire 尝试获取指定端点的令牌
 func (erl *EndpointRateLimiter) TryAcquire(endpoint string) bool {
-	return erl.getLimiter(endpoint).TryAcquire()
+	limiter, err := erl.getLimiter(endpoint)
+	return err == nil && limiter.TryAcquire()
 }
 
 // Close 停止所有端点限流器。
 func (erl *EndpointRateLimiter) Close() {
-	erl.mu.RLock()
-	defer erl.mu.RUnlock()
+	if erl == nil || !erl.closed.CompareAndSwap(false, true) {
+		return
+	}
+	erl.mu.Lock()
+	defer erl.mu.Unlock()
 	for _, limiter := range erl.limiters {
 		limiter.Close()
 	}
 }
 
 // getLimiter 获取或创建端点的速率限制器
-func (erl *EndpointRateLimiter) getLimiter(endpoint string) *RateLimiter {
+func (erl *EndpointRateLimiter) getLimiter(endpoint string) (*RateLimiter, error) {
+	if erl == nil || erl.closed.Load() {
+		return nil, ErrRateLimiterClosed
+	}
 	erl.mu.RLock()
 	limiter, exists := erl.limiters[endpoint]
 	erl.mu.RUnlock()
 
 	if exists {
-		return limiter
+		return limiter, nil
 	}
 
 	erl.mu.Lock()
 	defer erl.mu.Unlock()
+	if erl.closed.Load() {
+		return nil, ErrRateLimiterClosed
+	}
 
 	// 双重检查
 	if limiter, exists := erl.limiters[endpoint]; exists {
-		return limiter
+		return limiter, nil
 	}
 
 	// 创建新的限制器
 	limiter = NewRateLimiter(erl.rate, erl.burst)
 	erl.limiters[endpoint] = limiter
-	return limiter
+	return limiter, nil
 }
 
 // GlobalRateLimiter 全局速率限制器
 type GlobalRateLimiter struct {
 	generalLimiter  *RateLimiter
 	endpointLimiter *EndpointRateLimiter
+	closed          atomic.Bool
+}
+
+// RateLimitConfig 配置客户端的全局和端点令牌桶。
+type RateLimitConfig struct {
+	GlobalRate    time.Duration
+	GlobalBurst   int
+	EndpointRate  time.Duration
+	EndpointBurst int
+}
+
+// DefaultRateLimitConfig 返回默认限流配置。
+func DefaultRateLimitConfig() RateLimitConfig {
+	return RateLimitConfig{
+		GlobalRate:    500 * time.Millisecond,
+		GlobalBurst:   10,
+		EndpointRate:  200 * time.Millisecond,
+		EndpointBurst: 5,
+	}
 }
 
 // NewGlobalRateLimiter 创建全局速率限制器
 func NewGlobalRateLimiter() *GlobalRateLimiter {
-	return &GlobalRateLimiter{
-		// KOOK API 全局限制：120 requests per minute
-		generalLimiter: NewRateLimiter(500*time.Millisecond, 10),
-		// 端点级别限制：更宽松一些
-		endpointLimiter: NewEndpointRateLimiter(200*time.Millisecond, 5),
+	limiter, err := NewGlobalRateLimiterWithError(DefaultRateLimitConfig())
+	if err != nil {
+		panic(err)
 	}
+	return limiter
+}
+
+// NewGlobalRateLimiterWithError 创建经过完整配置校验的组合限流器。
+func NewGlobalRateLimiterWithError(config RateLimitConfig) (*GlobalRateLimiter, error) {
+	general, err := NewRateLimiterWithError(config.GlobalRate, config.GlobalBurst)
+	if err != nil {
+		return nil, fmt.Errorf("全局限流配置无效: %w", err)
+	}
+	endpoint, err := NewEndpointRateLimiterWithError(config.EndpointRate, config.EndpointBurst)
+	if err != nil {
+		general.Close()
+		return nil, fmt.Errorf("端点限流配置无效: %w", err)
+	}
+	return &GlobalRateLimiter{generalLimiter: general, endpointLimiter: endpoint}, nil
 }
 
 // Wait 等待令牌（同时检查全局和端点限制）
 func (grl *GlobalRateLimiter) Wait(ctx context.Context, endpoint string) error {
+	if grl == nil || grl.closed.Load() {
+		return ErrRateLimiterClosed
+	}
 	// 先等待全局限制
 	if err := grl.generalLimiter.Wait(ctx); err != nil {
 		return err
@@ -194,6 +292,9 @@ func (grl *GlobalRateLimiter) Wait(ctx context.Context, endpoint string) error {
 
 // TryAcquire 尝试获取令牌
 func (grl *GlobalRateLimiter) TryAcquire(endpoint string) bool {
+	if grl == nil || grl.closed.Load() {
+		return false
+	}
 	// 需要同时满足全局和端点限制
 	if !grl.generalLimiter.TryAcquire() {
 		return false
@@ -208,7 +309,7 @@ func (grl *GlobalRateLimiter) TryAcquire(endpoint string) bool {
 
 // Close 停止全局和端点限流器。
 func (grl *GlobalRateLimiter) Close() {
-	if grl == nil {
+	if grl == nil || !grl.closed.CompareAndSwap(false, true) {
 		return
 	}
 	if grl.generalLimiter != nil {

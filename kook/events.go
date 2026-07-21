@@ -3,9 +3,13 @@ package kook
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 )
+
+// ErrEventHandlerPanic 表示至少一个用户事件处理器发生了panic。
+var ErrEventHandlerPanic = errors.New("事件处理器发生panic")
 
 // MessageType 是 KOOK 普通消息类型。系统事件固定使用 MessageTypeSystem，
 // 具体事件名称从 extra.type 读取。
@@ -22,6 +26,42 @@ const (
 	MessageTypeItem   MessageType = 12
 	MessageTypeSystem MessageType = 255
 )
+
+// v1.1.1 事件编号兼容常量。新代码应按 MessageType 和 SystemEventType 分发。
+const (
+	EventTypeTextMessage            = 1
+	EventTypeImageMessage           = 2
+	EventTypeVideoMessage           = 3
+	EventTypeFileMessage            = 4
+	EventTypeAudioMessage           = 8
+	EventTypeKMDMessage             = 9
+	EventTypeCardMessage            = 10
+	EventTypeUserJoinedGuild        = 255
+	EventTypeUserLeftGuild          = 254
+	EventTypeUserUpdatedGuild       = 253
+	EventTypeChannelCreated         = 252
+	EventTypeChannelUpdated         = 251
+	EventTypeChannelDeleted         = 250
+	EventTypeMessageDeleted         = 249
+	EventTypeMessageUpdated         = 248
+	EventTypeReactionAdded          = 247
+	EventTypeReactionRemoved        = 246
+	EventTypeGuildUpdated           = 245
+	EventTypeGuildDeleted           = 244
+	EventTypeGuildMemberOnline      = 243
+	EventTypeGuildMemberOffline     = 242
+	EventTypePrivateMessage         = 1
+	EventTypePrivateMessageDeleted  = 249
+	EventTypePrivateMessageUpdated  = 248
+	EventTypePrivateReactionAdded   = 247
+	EventTypePrivateReactionRemoved = 246
+	ChannelTypeText                 = 1
+	ChannelTypeVoice                = 2
+	ChannelTypeThread               = 4
+)
+
+// EventHandler 是 v1.1.1 原始事件处理器签名。
+type EventHandler func(*Event)
 
 // EventChannelType 是事件来源类型。
 type EventChannelType string
@@ -203,11 +243,12 @@ func (d *eventDispatcher) onAnyEvent(handler RawEventHandler) {
 }
 
 func (d *eventDispatcher) dispatch(event *Event, onPanic func(any)) error {
+	handlerPanicked := false
 	d.mu.RLock()
 	anyHandlers := append([]RawEventHandler(nil), d.anyHandlers...)
 	d.mu.RUnlock()
 	for _, handler := range anyHandlers {
-		invokeEventHandler(func() { handler(event) }, onPanic)
+		handlerPanicked = invokeEventHandler(func() { handler(event) }, onPanic) || handlerPanicked
 	}
 
 	if event.Type == MessageTypeSystem {
@@ -219,7 +260,10 @@ func (d *eventDispatcher) dispatch(event *Event, onPanic func(any)) error {
 		handlers := append([]SystemEventHandler(nil), d.systemHandlers[systemEvent.Type]...)
 		d.mu.RUnlock()
 		for _, handler := range handlers {
-			invokeEventHandler(func() { handler(systemEvent) }, onPanic)
+			handlerPanicked = invokeEventHandler(func() { handler(systemEvent) }, onPanic) || handlerPanicked
+		}
+		if handlerPanicked {
+			return ErrEventHandlerPanic
 		}
 		return nil
 	}
@@ -229,18 +273,25 @@ func (d *eventDispatcher) dispatch(event *Event, onPanic func(any)) error {
 	d.mu.RUnlock()
 	messageEvent := &MessageEvent{Event: event}
 	for _, handler := range handlers {
-		invokeEventHandler(func() { handler(messageEvent) }, onPanic)
+		handlerPanicked = invokeEventHandler(func() { handler(messageEvent) }, onPanic) || handlerPanicked
+	}
+	if handlerPanicked {
+		return ErrEventHandlerPanic
 	}
 	return nil
 }
 
-func invokeEventHandler(handler func(), onPanic func(any)) {
+func invokeEventHandler(handler func(), onPanic func(any)) (panicked bool) {
 	defer func() {
-		if recovered := recover(); recovered != nil && onPanic != nil {
-			onPanic(recovered)
+		if recovered := recover(); recovered != nil {
+			panicked = true
+			if onPanic != nil {
+				onPanic(recovered)
+			}
 		}
 	}()
 	handler()
+	return false
 }
 
 // 角色权限常量。
@@ -279,26 +330,64 @@ const (
 )
 
 // GetEventTypeName 返回普通消息类型名称。
-func GetEventTypeName(eventType MessageType) string {
+func GetEventTypeName(value any) string {
+	var eventType int
+	switch typed := value.(type) {
+	case MessageType:
+		if typed == MessageTypeSystem {
+			return "系统事件"
+		}
+		eventType = int(typed)
+	case int:
+		eventType = typed
+	default:
+		return "未知事件"
+	}
 	switch eventType {
-	case MessageTypeText:
+	case EventTypeTextMessage:
 		return "文字消息"
-	case MessageTypeImage:
+	case EventTypeImageMessage:
 		return "图片消息"
-	case MessageTypeVideo:
+	case EventTypeVideoMessage:
 		return "视频消息"
-	case MessageTypeFile:
+	case EventTypeFileMessage:
 		return "文件消息"
-	case MessageTypeAudio:
+	case EventTypeAudioMessage:
 		return "音频消息"
-	case MessageTypeKMD:
+	case EventTypeKMDMessage:
 		return "KMarkdown消息"
-	case MessageTypeCard:
+	case EventTypeCardMessage:
 		return "卡片消息"
-	case MessageTypeItem:
+	case int(MessageTypeItem):
 		return "道具消息"
-	case MessageTypeSystem:
-		return "系统事件"
+	case EventTypeUserJoinedGuild:
+		return "用户加入服务器"
+	case EventTypeUserLeftGuild:
+		return "用户离开服务器"
+	case EventTypeUserUpdatedGuild:
+		return "用户更新服务器信息"
+	case EventTypeChannelCreated:
+		return "频道创建"
+	case EventTypeChannelUpdated:
+		return "频道更新"
+	case EventTypeChannelDeleted:
+		return "频道删除"
+	case EventTypeMessageDeleted:
+		return "消息删除"
+	case EventTypeMessageUpdated:
+		return "消息更新"
+	case EventTypeReactionAdded:
+		return "添加回应"
+	case EventTypeReactionRemoved:
+		return "移除回应"
+	case EventTypeGuildUpdated:
+		return "服务器更新"
+	case EventTypeGuildDeleted:
+		return "服务器删除"
+	case EventTypeGuildMemberOnline:
+		return "成员上线"
+	case EventTypeGuildMemberOffline:
+		return "成员下线"
 	default:
 		return "未知事件"
 	}

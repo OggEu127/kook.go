@@ -18,6 +18,9 @@ type RetryConfig struct {
 	MaxDelay       time.Duration    // 最大延迟
 	BackoffFactor  float64          // 退避因子
 	RetryableError func(error) bool // 判断错误是否可重试
+	// RetryNonIdempotent 允许网络错误和5xx响应触发POST/PATCH重试。
+	// 默认关闭，避免响应丢失时重复执行已经成功的写操作。
+	RetryNonIdempotent bool
 }
 
 // DefaultRetryConfig 默认重试配置
@@ -41,7 +44,7 @@ func IsRetryableError(err error) bool {
 
 	// 网络相关错误
 	if netErr, ok := err.(net.Error); ok {
-		return netErr.Timeout() || netErr.Temporary()
+		return netErr.Timeout()
 	}
 
 	// URL 错误
@@ -97,6 +100,14 @@ type RetryableFunc func(ctx context.Context) (*Response, error)
 
 // DoWithRetry 执行带重试的操作
 func DoWithRetry(ctx context.Context, fn RetryableFunc, config *RetryConfig, logger Logger) (*Response, error) {
+	return doWithRetry(ctx, "", fn, config, logger)
+}
+
+func doRequestWithRetry(ctx context.Context, method string, fn RetryableFunc, config *RetryConfig, logger Logger) (*Response, error) {
+	return doWithRetry(ctx, method, fn, config, logger)
+}
+
+func doWithRetry(ctx context.Context, method string, fn RetryableFunc, config *RetryConfig, logger Logger) (*Response, error) {
 	if config == nil {
 		config = DefaultRetryConfig()
 	}
@@ -111,24 +122,35 @@ func DoWithRetry(ctx context.Context, fn RetryableFunc, config *RetryConfig, log
 		if attempt > 0 {
 			delay := GetRetryDelay(attempt-1, config)
 
-			if IsRateLimitError(lastErr) {
-				// 速率限制错误，使用更长的延迟
-				delay = delay * 2
-				logger.Warnf("遇到速率限制错误，等待 %v 后重试 (第 %d 次)", delay, attempt)
-			} else {
-				logger.Warnf("请求失败，等待 %v 后重试 (第 %d 次): %v", delay, attempt, lastErr)
+			if retryAfter := retryAfterFromError(lastErr); retryAfter > delay {
+				delay = retryAfter
 			}
 
+			if logger != nil {
+				if IsRateLimitError(lastErr) {
+					logger.Warnf("遇到速率限制错误，等待 %v 后重试 (第 %d 次)", delay, attempt)
+				} else {
+					logger.Warnf("请求失败，等待 %v 后重试 (第 %d 次)", delay, attempt)
+				}
+			}
+
+			timer := time.NewTimer(delay)
 			select {
-			case <-time.After(delay):
+			case <-timer.C:
 			case <-ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
 				return nil, ctx.Err()
 			}
 		}
 
 		resp, err := fn(ctx)
 		if err == nil {
-			if attempt > 0 {
+			if attempt > 0 && logger != nil {
 				logger.Infof("重试成功 (第 %d 次尝试)", attempt+1)
 			}
 			return resp, nil
@@ -137,17 +159,40 @@ func DoWithRetry(ctx context.Context, fn RetryableFunc, config *RetryConfig, log
 		lastErr = err
 
 		// 检查是否为可重试错误
-		if !retryableError(err) {
-			logger.Debugf("遇到不可重试错误: %v", err)
+		if !retryableError(err) || !requestMethodAllowsRetry(method, err, config) {
+			if logger != nil {
+				logger.Debugf("遇到不可重试错误")
+			}
 			return resp, err
 		}
 
-		if attempt == config.MaxRetries {
+		if attempt == config.MaxRetries && logger != nil {
 			logger.Errorf("重试失败，已达到最大重试次数 (%d)", config.MaxRetries)
 		}
 	}
 
 	return nil, fmt.Errorf("重试失败: %w", lastErr)
+}
+
+func requestMethodAllowsRetry(method string, err error, config *RetryConfig) bool {
+	if method == "" || config.RetryNonIdempotent {
+		return true
+	}
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodPut, http.MethodDelete:
+		return true
+	case http.MethodPost, http.MethodPatch:
+		return IsRateLimitError(err)
+	default:
+		return false
+	}
+}
+
+func retryAfterFromError(err error) time.Duration {
+	if kookErr, ok := IsKOOKError(err); ok {
+		return kookErr.RetryAfter
+	}
+	return 0
 }
 
 // Logger 日志接口
@@ -164,23 +209,20 @@ func ExtractRetryAfter(resp *http.Response) time.Duration {
 		return 0
 	}
 
-	retryAfter := resp.Header.Get("Retry-After")
-	if retryAfter == "" {
+	return parseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
+}
+
+func parseRetryAfter(value string, now time.Time) time.Duration {
+	if value == "" {
 		return 0
 	}
-
-	// 尝试解析为秒数
-	if seconds, err := time.ParseDuration(retryAfter + "s"); err == nil {
+	if seconds, err := time.ParseDuration(value + "s"); err == nil && seconds > 0 {
 		return seconds
 	}
-
-	// 尝试解析为时间戳
-	if timestamp, err := time.Parse(time.RFC1123, retryAfter); err == nil {
-		duration := time.Until(timestamp)
-		if duration > 0 {
+	if timestamp, err := http.ParseTime(value); err == nil {
+		if duration := timestamp.Sub(now); duration > 0 {
 			return duration
 		}
 	}
-
 	return 0
 }
