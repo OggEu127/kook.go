@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 )
 
 // FriendService 好友相关API服务
@@ -38,7 +39,13 @@ type FriendListParams struct {
 }
 
 // GetFriendsList 获取好友、申请与屏蔽列表。
-func (s *FriendService) GetFriendsList(ctx context.Context, params FriendListParams) (*FriendsListResponse, error) {
+func (s *FriendService) GetFriendsList(ctx context.Context, args ...any) (*FriendsListResponse, error) {
+	params, err := compatParams("GetFriendsList", args, func(args []any) (FriendListParams, bool) {
+		return FriendListParams{}, len(args) == 0
+	})
+	if err != nil {
+		return nil, err
+	}
 	var query map[string]string
 	if params.Type != "" {
 		query = map[string]string{"type": params.Type}
@@ -62,7 +69,17 @@ type DeleteFriendParams struct {
 }
 
 // DeleteFriend 删除好友。
-func (s *FriendService) DeleteFriend(ctx context.Context, params DeleteFriendParams) error {
+func (s *FriendService) DeleteFriend(ctx context.Context, args ...any) error {
+	params, err := compatParams("DeleteFriend", args, func(args []any) (DeleteFriendParams, bool) {
+		if len(args) != 1 {
+			return DeleteFriendParams{}, false
+		}
+		userID, ok := compatString(args[0])
+		return DeleteFriendParams{UserID: userID}, ok
+	})
+	if err != nil {
+		return err
+	}
 	if params.UserID == "" {
 		return fmt.Errorf("用户ID不能为空")
 	}
@@ -71,7 +88,7 @@ func (s *FriendService) DeleteFriend(ctx context.Context, params DeleteFriendPar
 		"user_id": params.UserID,
 	}
 
-	_, err := s.client.Post(ctx, "friend/delete", body)
+	_, err = s.client.Post(ctx, "friend/delete", body)
 	return err
 }
 
@@ -81,7 +98,19 @@ type HandleFriendRequestParams struct {
 }
 
 // HandleFriendRequest 处理好友请求。
-func (s *FriendService) HandleFriendRequest(ctx context.Context, params HandleFriendRequestParams) (bool, error) {
+func (s *FriendService) HandleFriendRequest(ctx context.Context, args ...any) (bool, error) {
+	params, err := compatParams("HandleFriendRequest", args, func(args []any) (HandleFriendRequestParams, bool) {
+		if len(args) != 2 {
+			return HandleFriendRequestParams{}, false
+		}
+		requestID, okID := compatString(args[0])
+		accept, okAccept := args[1].(bool)
+		id, parseErr := strconv.Atoi(requestID)
+		return HandleFriendRequestParams{ID: id, Accept: accept}, okID && okAccept && parseErr == nil
+	})
+	if err != nil {
+		return false, err
+	}
 	if params.ID <= 0 {
 		return false, fmt.Errorf("请求ID不能为空")
 	}
@@ -107,12 +136,22 @@ type BlockFriendParams struct {
 }
 
 // BlockFriend 屏蔽用户。
-func (s *FriendService) BlockFriend(ctx context.Context, params BlockFriendParams) error {
+func (s *FriendService) BlockFriend(ctx context.Context, args ...any) error {
+	params, err := compatParams("BlockFriend", args, func(args []any) (BlockFriendParams, bool) {
+		if len(args) != 1 {
+			return BlockFriendParams{}, false
+		}
+		userID, ok := compatString(args[0])
+		return BlockFriendParams{UserID: userID}, ok
+	})
+	if err != nil {
+		return err
+	}
 	if params.UserID == "" {
 		return fmt.Errorf("用户ID不能为空")
 	}
 
-	_, err := s.client.Post(ctx, "friend/block", map[string]interface{}{
+	_, err = s.client.Post(ctx, "friend/block", map[string]interface{}{
 		"user_id": params.UserID,
 	})
 	return err
@@ -123,15 +162,52 @@ type UnblockFriendParams struct {
 }
 
 // UnblockFriend 取消屏蔽用户。
-func (s *FriendService) UnblockFriend(ctx context.Context, params UnblockFriendParams) error {
+func (s *FriendService) UnblockFriend(ctx context.Context, args ...any) error {
+	params, err := compatParams("UnblockFriend", args, func(args []any) (UnblockFriendParams, bool) {
+		if len(args) != 1 {
+			return UnblockFriendParams{}, false
+		}
+		userID, ok := compatString(args[0])
+		return UnblockFriendParams{UserID: userID}, ok
+	})
+	if err != nil {
+		return err
+	}
 	if params.UserID == "" {
 		return fmt.Errorf("用户ID不能为空")
 	}
 
-	_, err := s.client.Post(ctx, "friend/unblock", map[string]interface{}{
+	_, err = s.client.Post(ctx, "friend/unblock", map[string]interface{}{
 		"user_id": params.UserID,
 	})
 	return err
+}
+
+// HandleFriendRequestLegacy 保留 v1.1.1 只返回 error 的调用形状。
+func (s *FriendService) HandleFriendRequestLegacy(ctx context.Context, requestID string, accept bool) error {
+	_, err := s.HandleFriendRequest(ctx, requestID, accept)
+	return err
+}
+
+func (s *FriendService) AcceptFriendRequest(ctx context.Context, requestID string) error {
+	return s.HandleFriendRequestLegacy(ctx, requestID, true)
+}
+
+func (s *FriendService) RejectFriendRequest(ctx context.Context, requestID string) error {
+	return s.HandleFriendRequestLegacy(ctx, requestID, false)
+}
+
+// 以下亲密关系端点没有出现在当前官方契约中，仅保留源码兼容入口。
+func (s *FriendService) CreateRelation(context.Context, string) error {
+	return unsupportedEndpoint("friend/create-relation")
+}
+
+func (s *FriendService) HandleRelation(context.Context, string, bool) error {
+	return unsupportedEndpoint("friend/handle-relation")
+}
+
+func (s *FriendService) UnravelRelation(context.Context, string) error {
+	return unsupportedEndpoint("friend/unravel-relation")
 }
 
 // 数据结构定义
@@ -149,6 +225,16 @@ type FriendRelation struct {
 	Type       string `json:"type"`
 	FriendInfo User   `json:"friend_info"`
 	Own        bool   `json:"own"`
+}
+
+// FriendRequest 保留 v1.1.1 的好友请求类型。
+type FriendRequest struct {
+	ID      string `json:"id"`
+	UserID  string `json:"user_id"`
+	User    User   `json:"user"`
+	Status  int    `json:"status"`
+	Time    int64  `json:"time"`
+	Message string `json:"message"`
 }
 
 // FriendsListResponse 好友列表响应

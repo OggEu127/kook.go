@@ -21,7 +21,7 @@ func main() {
 
 	// 创建客户端
 	client := kook.NewClient(token)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// 创建WebSocket客户端
 	wsClient := kook.NewWebSocketClient(client, false)

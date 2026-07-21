@@ -1,5 +1,5 @@
 .PHONY: all deps tidy test test-race test-integration test-mutation test-oauth \
-	build build-all build-examples run fmt fmt-check vet lint clean install docs \
+	build build-all build-examples run fmt fmt-check vet lint vuln clean install docs \
 	example-simple example-webhook example-api example-advanced example-complete \
 	verify test-full help
 
@@ -89,6 +89,9 @@ vet:
 lint:
 	golangci-lint run
 
+vuln:
+	govulncheck ./...
+
 clean:
 	rm -rf $(BUILD_DIR)
 
@@ -99,7 +102,7 @@ docs:
 	godoc -http=:6060
 
 # 发布前的离线检查，不访问 KOOK。
-verify: fmt-check test test-race vet build-all
+verify: fmt-check test test-race vet lint vuln build-all
 
 test-full: verify
 
@@ -121,6 +124,7 @@ help:
 	@echo "  fmt-check         检查 Go 代码格式"
 	@echo "  vet               运行 go vet"
 	@echo "  lint              运行 golangci-lint"
+	@echo "  vuln              运行 govulncheck"
 	@echo "  verify            执行发布前离线检查"
 	@echo "  clean             删除 build/"
 	@echo "  install           安装根目录程序"

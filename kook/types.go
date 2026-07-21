@@ -137,37 +137,40 @@ func decodeIntSlice(data json.RawMessage) ([]int, error) {
 
 // User 用户信息
 type User struct {
-	ID               string         `json:"id"`
-	Username         string         `json:"username"`
-	IdentifyNum      string         `json:"identify_num"`
-	Online           bool           `json:"online"`
-	OS               string         `json:"os"`
-	Bot              bool           `json:"bot"`
-	BotStatus        BoolInt        `json:"bot_status"`
-	Status           int            `json:"status"`
-	Avatar           string         `json:"avatar"`
-	VipAvatar        string         `json:"vip_avatar"`
-	Banner           string         `json:"banner"`
-	Nickname         string         `json:"nickname"`
-	Roles            []int          `json:"roles"`
-	IsVip            bool           `json:"is_vip"`
-	VipAmp           bool           `json:"vip_amp"`
-	InvitedCount     int            `json:"invited_count"`
-	TagInfo          TagInfo        `json:"tag_info"`
-	MobileVerified   bool           `json:"mobile_verified"`
-	IsSys            bool           `json:"is_sys"`
-	ClientID         string         `json:"client_id"`
-	Verified         bool           `json:"verified"`
-	MobilePrefix     string         `json:"mobile_prefix"`
-	Mobile           string         `json:"mobile"`
-	JoinedAt         int64          `json:"joined_at"`
-	ActiveTime       int64          `json:"active_time"`
-	BoostStartAt     *int64         `json:"boost_start_at"`
-	IsAIReduceNoise  bool           `json:"is_ai_reduce_noise"`
-	IsPersonalCardBG bool           `json:"is_personal_card_bg"`
-	LiveInfo         UserLiveInfo   `json:"live_info"`
+	ID               string       `json:"id"`
+	Username         string       `json:"username"`
+	IdentifyNum      string       `json:"identify_num"`
+	Online           bool         `json:"online"`
+	OS               string       `json:"os"`
+	Bot              bool         `json:"bot"`
+	BotStatus        BoolInt      `json:"bot_status"`
+	Status           int          `json:"status"`
+	Avatar           string       `json:"avatar"`
+	VipAvatar        string       `json:"vip_avatar"`
+	Banner           string       `json:"banner"`
+	Nickname         string       `json:"nickname"`
+	Roles            []int        `json:"roles"`
+	IsVip            bool         `json:"is_vip"`
+	VipAmp           bool         `json:"vip_amp"`
+	InvitedCount     int          `json:"invited_count"`
+	TagInfo          TagInfo      `json:"tag_info"`
+	MobileVerified   bool         `json:"mobile_verified"`
+	IsSys            bool         `json:"is_sys"`
+	ClientID         string       `json:"client_id"`
+	Verified         bool         `json:"verified"`
+	MobilePrefix     string       `json:"mobile_prefix"`
+	Mobile           string       `json:"mobile"`
+	JoinedAt         int64        `json:"joined_at"`
+	ActiveTime       int64        `json:"active_time"`
+	BoostStartAt     *int64       `json:"boost_start_at"`
+	IsAIReduceNoise  bool         `json:"is_ai_reduce_noise"`
+	IsPersonalCardBG bool         `json:"is_personal_card_bg"`
+	LiveInfo         UserLiveInfo `json:"live_info"`
+	// DecorationsIDMap 保留历史的单值视图。服务端返回数组时取第一个ID。
 	DecorationsIDMap map[string]int `json:"decorations_id_map"`
-	Game             *Game          `json:"game"`
+	// DecorationIDs 提供 decorations_id_map 的完整归一化视图，标量也会转换为单元素切片。
+	DecorationIDs map[string][]int `json:"-"`
+	Game          *Game            `json:"game"`
 }
 
 // UnmarshalJSON 兼容用户对象中的数字 ID、0/1 布尔值和字符串角色 ID。
@@ -186,6 +189,7 @@ func (u *User) UnmarshalJSON(data []byte) error {
 		IsAIReduceNoise  json.RawMessage `json:"is_ai_reduce_noise"`
 		IsPersonalCardBG json.RawMessage `json:"is_personal_card_bg"`
 		Roles            json.RawMessage `json:"roles"`
+		DecorationsIDMap json.RawMessage `json:"decorations_id_map"`
 	}{userAlias: (*userAlias)(u)}
 	if err := json.Unmarshal(data, &value); err != nil {
 		return err
@@ -229,7 +233,64 @@ func (u *User) UnmarshalJSON(data []byte) error {
 		}
 		u.Roles = roles
 	}
+	if len(value.DecorationsIDMap) > 0 {
+		legacy, normalized, err := decodeDecorationIDs(value.DecorationsIDMap)
+		if err != nil {
+			return fmt.Errorf("解析user.decorations_id_map失败: %w", err)
+		}
+		u.DecorationsIDMap = legacy
+		u.DecorationIDs = normalized
+	}
 	return nil
+}
+
+func decodeDecorationIDs(data json.RawMessage) (map[string]int, map[string][]int, error) {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil, nil
+	}
+	if trimmed[0] == '[' {
+		var empty []json.RawMessage
+		if err := json.Unmarshal(trimmed, &empty); err != nil {
+			return nil, nil, err
+		}
+		if len(empty) != 0 {
+			return nil, nil, fmt.Errorf("期望对象或空数组")
+		}
+		return map[string]int{}, map[string][]int{}, nil
+	}
+
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &values); err != nil {
+		return nil, nil, err
+	}
+	legacy := make(map[string]int, len(values))
+	normalized := make(map[string][]int, len(values))
+	for key, raw := range values {
+		value := bytes.TrimSpace(raw)
+		if len(value) == 0 || bytes.Equal(value, []byte("null")) {
+			normalized[key] = nil
+			continue
+		}
+		if value[0] == '[' {
+			ids, err := decodeIntSlice(value)
+			if err != nil {
+				return nil, nil, fmt.Errorf("%s: %w", key, err)
+			}
+			normalized[key] = ids
+			if len(ids) > 0 {
+				legacy[key] = ids[0]
+			}
+			continue
+		}
+		id, err := decodeIntOrString(value)
+		if err != nil {
+			return nil, nil, fmt.Errorf("%s: %w", key, err)
+		}
+		legacy[key] = id
+		normalized[key] = []int{id}
+	}
+	return legacy, normalized, nil
 }
 
 // UserLiveInfo 是用户直播状态。

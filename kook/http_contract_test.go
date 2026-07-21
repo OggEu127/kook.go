@@ -153,7 +153,7 @@ func TestOfficialEndpointInventoryAndTransportContract(t *testing.T) {
 			defer server.Close()
 
 			client := NewClient("test-token", WithBaseURL(server.URL+"/api"), WithoutRateLimit(), WithoutRetry())
-			defer client.Close()
+			defer func() { _ = client.Close() }()
 			if contract.method == http.MethodGet {
 				_, err := client.Get(context.Background(), contract.endpoint, map[string]string{"contract": "value"})
 				require.NoError(t, err)
@@ -163,6 +163,37 @@ func TestOfficialEndpointInventoryAndTransportContract(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+}
+
+func TestUserDecorationsIDMapAcceptsScalarAndArrayValues(t *testing.T) {
+	var user User
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id":"user",
+		"decorations_id_map":{
+			"background":1,
+			"join_voice":"2",
+			"nameplates":[3,"4"],
+			"empty":[],
+			"missing":null
+		}
+	}`), &user))
+
+	require.Equal(t, map[string]int{
+		"background": 1,
+		"join_voice": 2,
+		"nameplates": 3,
+	}, user.DecorationsIDMap)
+	require.Equal(t, map[string][]int{
+		"background": {1},
+		"join_voice": {2},
+		"nameplates": {3, 4},
+		"empty":      {},
+		"missing":    nil,
+	}, user.DecorationIDs)
+
+	require.NoError(t, json.Unmarshal([]byte(`{"decorations_id_map":[]}`), &user))
+	require.Empty(t, user.DecorationsIDMap)
+	require.Empty(t, user.DecorationIDs)
 }
 
 func TestOAuthTransportAndExpiryCompatibility(t *testing.T) {
@@ -395,7 +426,7 @@ func TestKOOKErrorClassificationAndContext(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient("test-token", WithBaseURL(server.URL+"/api"), WithoutRateLimit(), WithoutRetry())
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	_, err := client.User.GetMe(context.Background())
 	require.Error(t, err)
 	apiErr, ok := IsKOOKError(err)

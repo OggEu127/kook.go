@@ -57,7 +57,7 @@ func performWebhookRequest(handler *WebhookHandler, body []byte, contentEncoding
 
 func TestWebhookChallengeAndVerifyToken(t *testing.T) {
 	client := newWebhookTestClient(t)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	handler := NewWebhookHandler(client, "", "verify")
 
 	challenge := webhookPayload(t, 0, map[string]any{
@@ -88,7 +88,7 @@ func TestWebhookCompressionAndHeaderlessZlib(t *testing.T) {
 	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			client := newWebhookTestClient(t)
-			defer client.Close()
+			defer func() { _ = client.Close() }()
 			handler := NewWebhookHandler(client, "", "verify")
 			received := make(chan string, 1)
 			handler.OnMessage(MessageTypeText, func(event *MessageEvent) {
@@ -132,7 +132,7 @@ func zlibWebhookPayload(t *testing.T, payload []byte) []byte {
 
 func TestWebhookAES256CBC(t *testing.T) {
 	client := newWebhookTestClient(t)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	const key = "0123456789abcdef0123456789abcdef"
 	handler := NewWebhookHandler(client, key, "verify")
 	received := make(chan string, 1)
@@ -174,7 +174,7 @@ func encryptWebhookPayloadForTest(t *testing.T, plain []byte, key string) []byte
 
 func TestWebhookSNDeduplication(t *testing.T) {
 	client := newWebhookTestClient(t)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	handler := NewWebhookHandler(client, "", "verify", WithWebhookDedupTTL(time.Minute))
 	received := make(chan struct{}, 2)
 	handler.OnMessage(MessageTypeText, func(*MessageEvent) { received <- struct{}{} })
@@ -204,7 +204,7 @@ func (s *duplicateWebhookStore) CheckAndStore(context.Context, int, time.Duratio
 
 func TestWebhookInjectedDeduplicator(t *testing.T) {
 	client := newWebhookTestClient(t)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	store := &duplicateWebhookStore{}
 	handler := NewWebhookHandler(client, "", "verify", WithWebhookDeduplicator(store))
 	payload := webhookPayload(t, 7, textWebhookEvent("verify", "hello"))
@@ -215,7 +215,7 @@ func TestWebhookInjectedDeduplicator(t *testing.T) {
 
 func TestWebhookHandlerPanicAndConcurrency(t *testing.T) {
 	client := newWebhookTestClient(t)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	handler := NewWebhookHandler(client, "", "verify")
 	const total = 24
 	received := make(chan int, total)
@@ -244,4 +244,71 @@ func TestWebhookHandlerPanicAndConcurrency(t *testing.T) {
 			t.Fatalf("received %d/%d concurrent webhooks", len(seen), total)
 		}
 	}
+}
+
+func TestWebhookRejectsInvalidConfigurationAndOversizedBodies(t *testing.T) {
+	client := newWebhookTestClient(t)
+	defer func() { _ = client.Close() }()
+
+	_, err := NewWebhookHandlerWithError(client, "", "")
+	require.ErrorContains(t, err, "verifyToken")
+	invalid := NewWebhookHandler(client, "", "")
+	recorder := performWebhookRequest(invalid, []byte(`{}`), "")
+	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+	_, err = NewWebhookHandlerWithError(client, "short", "verify")
+	require.ErrorContains(t, err, "encryptKey")
+	_, err = NewWebhookHandlerWithError(client, "", "verify", WithWebhookDeduplicator(nil))
+	require.ErrorContains(t, err, "去重器")
+	_, err = NewWebhookHandlerWithError(client, "", "verify", WithWebhookDedupTTL(0))
+	require.ErrorContains(t, err, "TTL")
+	_, err = NewWebhookHandlerWithError(client, "", "verify", WithWebhookDispatch(1, 2))
+	require.ErrorContains(t, err, "派发")
+
+	handler, err := NewWebhookHandlerWithError(client, "", "verify", WithWebhookBodyLimits(64, 128))
+	require.NoError(t, err)
+	defer func() { _ = handler.Shutdown(context.Background()) }()
+	recorder = performWebhookRequest(handler, bytes.Repeat([]byte("x"), 65), "")
+	require.Equal(t, http.StatusRequestEntityTooLarge, recorder.Code)
+
+	bomb := gzipWebhookPayload(t, bytes.Repeat([]byte("x"), 1024))
+	require.Less(t, len(bomb), 64)
+	recorder = performWebhookRequest(handler, bomb, "gzip")
+	require.Equal(t, http.StatusRequestEntityTooLarge, recorder.Code)
+}
+
+func TestWebhookQueueBackpressureDoesNotDeduplicateRejectedEvent(t *testing.T) {
+	client := newWebhookTestClient(t)
+	defer func() { _ = client.Close() }()
+	handler, err := NewWebhookHandlerWithError(client, "", "verify", WithWebhookDispatch(1, 1))
+	require.NoError(t, err)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	received := make(chan int, 2)
+	handler.OnMessage(MessageTypeText, func(event *MessageEvent) {
+		if event.SN == 1 {
+			close(started)
+			<-release
+		}
+		received <- event.SN
+	})
+
+	first := webhookPayload(t, 1, textWebhookEvent("verify", "first"))
+	second := webhookPayload(t, 2, textWebhookEvent("verify", "second"))
+	require.Equal(t, http.StatusOK, performWebhookRequest(handler, first, "").Code)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not start")
+	}
+	require.Equal(t, http.StatusServiceUnavailable, performWebhookRequest(handler, second, "").Code)
+	close(release)
+	require.Equal(t, 1, receiveInt(t, received))
+
+	require.Equal(t, http.StatusOK, performWebhookRequest(handler, second, "").Code)
+	require.Equal(t, 2, receiveInt(t, received))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.NoError(t, handler.Shutdown(ctx))
+	require.Equal(t, http.StatusServiceUnavailable, performWebhookRequest(handler, second, "").Code)
 }

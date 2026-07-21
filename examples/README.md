@@ -128,7 +128,7 @@ go run main.go
 # 必需
 export KOOK_TOKEN="你的机器人令牌"
 
-# 可选（用于验证请求来源）
+# 必需（用于验证请求来源；空值会失败关闭）
 export KOOK_VERIFY_TOKEN="你的验证令牌"
 ```
 
@@ -142,6 +142,7 @@ go run main.go
 1. 程序会在8080端口启动HTTP服务器
 2. Webhook接收地址：`http://你的服务器:8080/webhook`
 3. 需要在KOOK开发者后台配置Webhook URL
+4. 程序收到 SIGINT/SIGTERM 后会调用 `Shutdown` 完成有界队列中的事件并优雅关闭
 
 ### 5. complete_api_demo - 完整API演示
 

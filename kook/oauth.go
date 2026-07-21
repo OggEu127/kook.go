@@ -86,7 +86,7 @@ func (c *OAuthClient) ExchangeToken(ctx context.Context, params OAuthTokenParams
 	if err != nil {
 		return nil, fmt.Errorf("OAuth请求失败: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("读取OAuth响应失败: %w", err)
@@ -104,10 +104,11 @@ func (c *OAuthClient) ExchangeToken(ctx context.Context, params OAuthTokenParams
 
 // OAuthTokenResponse OAuth Token 响应。
 type OAuthTokenResponse struct {
-	AccessToken string `json:"access_token"`
-	TokenType   string `json:"token_type"`
-	ExpiresIn   int    `json:"expires_in"`
-	Scope       string `json:"scope"`
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int    `json:"expires_in"`
+	RefreshToken string `json:"refresh_token"`
+	Scope        string `json:"scope"`
 }
 
 // UnmarshalJSON 兼容官方文档中的 expire_in 与示例中的 expires_in。

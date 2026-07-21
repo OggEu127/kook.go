@@ -18,7 +18,7 @@ func main() {
 
 	// 创建客户端
 	client := kook.NewClient(token)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// 获取当前用户信息
 	fmt.Println("=== 获取机器人信息 ===")
@@ -50,7 +50,8 @@ func main() {
 		log.Printf("获取服务器列表失败: %v", err)
 	} else {
 		fmt.Printf("服务器数量: %d\n", len(guilds.Items))
-		for _, guild := range guilds.Items {
+		if len(guilds.Items) > 0 {
+			guild := guilds.Items[0]
 			fmt.Printf("- %s (ID: %s)\n", guild.Name, guild.ID)
 
 			// 演示角色管理API
@@ -95,8 +96,6 @@ func main() {
 				}
 			}
 
-			// 只处理第一个服务器作为演示
-			break
 		}
 	}
 
