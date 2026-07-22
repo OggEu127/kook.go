@@ -147,6 +147,10 @@ func TestKOOKReadOnlyIntegration(t *testing.T) {
 			_, err := client.Invite.GetInviteList(ctx, InviteListParams{GuildID: env["KOOK_TEST_GUILD_ID"], Page: testPtr(1), PageSize: testPtr(10)})
 			return err
 		}},
+		{"invitees", func() error {
+			_, err := client.Invite.GetInvitees(ctx, InviteeListParams{GuildID: env["KOOK_TEST_GUILD_ID"], Status: testPtr(InviteeStatusAll), Page: 1, PageSize: 10})
+			return err
+		}},
 		{"intimacy", func() error {
 			_, err := client.Intimacy.GetIntimacy(ctx, IntimacyViewParams{UserID: env["KOOK_TEST_USER_ID"]})
 			return err

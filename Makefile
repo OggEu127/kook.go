@@ -26,7 +26,7 @@ test:
 test-race:
 	$(GO) test -race -short ./...
 
-# 运行真实 KOOK 只读测试，所需环境变量见 DETAILED_GUIDE.md。
+# 运行真实 KOOK 只读测试，所需环境变量见 TESTING.md。
 test-integration:
 	$(GO) test ./...
 

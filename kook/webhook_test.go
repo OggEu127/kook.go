@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -131,32 +132,44 @@ func zlibWebhookPayload(t *testing.T, payload []byte) []byte {
 }
 
 func TestWebhookAES256CBC(t *testing.T) {
-	client := newWebhookTestClient(t)
-	defer func() { _ = client.Close() }()
-	const key = "0123456789abcdef0123456789abcdef"
-	handler := NewWebhookHandler(client, key, "verify")
-	received := make(chan string, 1)
-	handler.OnMessage(MessageTypeText, func(event *MessageEvent) {
-		content, err := event.TextContent()
-		require.NoError(t, err)
-		received <- content
-	})
+	for _, key := range []string{"short-key", "0123456789abcdef0123456789abcdef"} {
+		key := key
+		t.Run(fmt.Sprintf("key-length-%d", len(key)), func(t *testing.T) {
+			client := newWebhookTestClient(t)
+			defer func() { _ = client.Close() }()
+			handler := NewWebhookHandler(client, key, "verify")
+			defer func() { _ = handler.Shutdown(context.Background()) }()
+			received := make(chan string, 1)
+			handler.OnMessage(MessageTypeText, func(event *MessageEvent) {
+				content, err := event.TextContent()
+				require.NoError(t, err)
+				received <- content
+			})
 
-	plain := webhookPayload(t, 11, textWebhookEvent("verify", "encrypted"))
-	encrypted := encryptWebhookPayloadForTest(t, plain, key)
-	recorder := performWebhookRequest(handler, encrypted, "")
-	require.Equal(t, http.StatusOK, recorder.Code)
-	select {
-	case content := <-received:
-		require.Equal(t, "encrypted", content)
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for encrypted webhook")
+			plain := webhookPayload(t, 11, textWebhookEvent("verify", "encrypted"))
+			encrypted := encryptWebhookPayloadForTest(t, plain, key)
+			recorder := performWebhookRequest(handler, encrypted, "")
+			require.Equal(t, http.StatusOK, recorder.Code)
+			select {
+			case content := <-received:
+				require.Equal(t, "encrypted", content)
+			case <-time.After(time.Second):
+				t.Fatal("timed out waiting for encrypted webhook")
+			}
+		})
 	}
 }
 
 func encryptWebhookPayloadForTest(t *testing.T, plain []byte, key string) []byte {
 	t.Helper()
 	keyBytes := []byte(key)
+	if len(keyBytes) < 32 {
+		padded := make([]byte, 32)
+		copy(padded, keyBytes)
+		keyBytes = padded
+	} else if len(keyBytes) > 32 {
+		keyBytes = keyBytes[:32]
+	}
 	block, err := aes.NewCipher(keyBytes)
 	require.NoError(t, err)
 	padding := aes.BlockSize - len(plain)%aes.BlockSize
@@ -176,6 +189,7 @@ func TestWebhookSNDeduplication(t *testing.T) {
 	client := newWebhookTestClient(t)
 	defer func() { _ = client.Close() }()
 	handler := NewWebhookHandler(client, "", "verify", WithWebhookDedupTTL(time.Minute))
+	defer func() { _ = handler.Shutdown(context.Background()) }()
 	received := make(chan struct{}, 2)
 	handler.OnMessage(MessageTypeText, func(*MessageEvent) { received <- struct{}{} })
 	payload := webhookPayload(t, 42, textWebhookEvent("verify", "duplicate"))
@@ -194,6 +208,61 @@ func TestWebhookSNDeduplication(t *testing.T) {
 	}
 }
 
+func TestWebhookDeduplicationAllowsSNReuseForDifferentPayload(t *testing.T) {
+	client := newWebhookTestClient(t)
+	defer func() { _ = client.Close() }()
+	handler := NewWebhookHandler(client, "", "verify", WithWebhookDedupTTL(time.Minute))
+	defer func() { _ = handler.Shutdown(context.Background()) }()
+	received := make(chan string, 2)
+	handler.OnMessage(MessageTypeText, func(event *MessageEvent) {
+		content, err := event.TextContent()
+		require.NoError(t, err)
+		received <- content
+	})
+
+	first := webhookPayload(t, 1, textWebhookEvent("verify", "before-wrap"))
+	second := webhookPayload(t, 1, textWebhookEvent("verify", "after-wrap"))
+	require.Equal(t, http.StatusOK, performWebhookRequest(handler, first, "").Code)
+	require.Equal(t, http.StatusOK, performWebhookRequest(handler, second, "").Code)
+	require.Equal(t, "before-wrap", <-received)
+	require.Equal(t, "after-wrap", <-received)
+}
+
+func TestMemoryWebhookDeduplicatorReservationOwnership(t *testing.T) {
+	deduplicator := NewMemoryWebhookDeduplicator(2)
+	now := time.Unix(100, 0)
+	deduplicator.now = func() time.Time { return now }
+
+	state, firstReservation, err := deduplicator.Reserve(context.Background(), "event", time.Second)
+	require.NoError(t, err)
+	require.Equal(t, WebhookDedupAcquired, state)
+	now = now.Add(2 * time.Second)
+	state, secondReservation, err := deduplicator.Reserve(context.Background(), "event", time.Second)
+	require.NoError(t, err)
+	require.Equal(t, WebhookDedupAcquired, state)
+	require.NotEqual(t, firstReservation, secondReservation)
+
+	require.ErrorIs(t, deduplicator.Complete(context.Background(), "event", firstReservation, time.Minute), ErrWebhookReservationLost)
+	require.ErrorIs(t, deduplicator.Release(context.Background(), "event", firstReservation), ErrWebhookReservationLost)
+	require.NoError(t, deduplicator.Complete(context.Background(), "event", secondReservation, time.Minute))
+	state, _, err = deduplicator.Reserve(context.Background(), "event", time.Second)
+	require.NoError(t, err)
+	require.Equal(t, WebhookDedupCompleted, state)
+}
+
+func TestMemoryWebhookDeduplicatorDoesNotEvictInFlightReservation(t *testing.T) {
+	deduplicator := NewMemoryWebhookDeduplicator(1)
+	state, reservation, err := deduplicator.Reserve(context.Background(), "first", time.Minute)
+	require.NoError(t, err)
+	require.Equal(t, WebhookDedupAcquired, state)
+	_, _, err = deduplicator.Reserve(context.Background(), "second", time.Minute)
+	require.ErrorIs(t, err, ErrWebhookDedupCapacity)
+	require.NoError(t, deduplicator.Release(context.Background(), "first", reservation))
+	state, _, err = deduplicator.Reserve(context.Background(), "second", time.Minute)
+	require.NoError(t, err)
+	require.Equal(t, WebhookDedupAcquired, state)
+}
+
 type duplicateWebhookStore struct {
 	calls atomic.Int32
 }
@@ -206,7 +275,17 @@ func TestWebhookInjectedDeduplicator(t *testing.T) {
 	client := newWebhookTestClient(t)
 	defer func() { _ = client.Close() }()
 	store := &duplicateWebhookStore{}
-	handler := NewWebhookHandler(client, "", "verify", WithWebhookDeduplicator(store))
+	_, err := NewWebhookHandlerWithError(client, "", "verify", WithWebhookDeduplicator(store))
+	require.ErrorContains(t, err, "事务型去重器")
+	handler, err := NewWebhookHandlerWithError(
+		client,
+		"",
+		"verify",
+		WithWebhookDeduplicator(store),
+		WithWebhookAckMode(WebhookAckAfterEnqueue),
+	)
+	require.NoError(t, err)
+	defer func() { _ = handler.Shutdown(context.Background()) }()
 	payload := webhookPayload(t, 7, textWebhookEvent("verify", "hello"))
 	require.Equal(t, http.StatusOK, performWebhookRequest(handler, payload, "").Code)
 	require.Equal(t, http.StatusOK, performWebhookRequest(handler, payload, "").Code)
@@ -217,22 +296,27 @@ func TestWebhookHandlerPanicAndConcurrency(t *testing.T) {
 	client := newWebhookTestClient(t)
 	defer func() { _ = client.Close() }()
 	handler := NewWebhookHandler(client, "", "verify")
+	defer func() { _ = handler.Shutdown(context.Background()) }()
 	const total = 24
 	received := make(chan int, total)
-	handler.OnMessage(MessageTypeText, func(*MessageEvent) { panic("expected panic") })
 	handler.OnMessage(MessageTypeText, func(event *MessageEvent) { received <- event.SN })
 
 	var requestGroup sync.WaitGroup
+	statuses := make(chan int, total)
 	for index := 1; index <= total; index++ {
 		index := index
 		requestGroup.Add(1)
 		go func() {
 			defer requestGroup.Done()
 			payload := webhookPayload(t, index, textWebhookEvent("verify", fmt.Sprintf("message-%d", index)))
-			require.Equal(t, http.StatusOK, performWebhookRequest(handler, payload, "").Code)
+			statuses <- performWebhookRequest(handler, payload, "").Code
 		}()
 	}
 	requestGroup.Wait()
+	close(statuses)
+	for status := range statuses {
+		require.Equal(t, http.StatusOK, status)
+	}
 
 	seen := make(map[int]struct{}, total)
 	deadline := time.After(2 * time.Second)
@@ -246,6 +330,23 @@ func TestWebhookHandlerPanicAndConcurrency(t *testing.T) {
 	}
 }
 
+func TestWebhookHandlerPanicReleasesDedupReservation(t *testing.T) {
+	client := newWebhookTestClient(t)
+	defer func() { _ = client.Close() }()
+	handler := NewWebhookHandler(client, "", "verify")
+	defer func() { _ = handler.Shutdown(context.Background()) }()
+	var calls atomic.Int32
+	handler.OnMessage(MessageTypeText, func(*MessageEvent) {
+		calls.Add(1)
+		panic("expected panic")
+	})
+	payload := webhookPayload(t, 99, textWebhookEvent("verify", "retry-after-panic"))
+
+	require.Equal(t, http.StatusInternalServerError, performWebhookRequest(handler, payload, "").Code)
+	require.Equal(t, http.StatusInternalServerError, performWebhookRequest(handler, payload, "").Code)
+	require.Equal(t, int32(2), calls.Load())
+}
+
 func TestWebhookRejectsInvalidConfigurationAndOversizedBodies(t *testing.T) {
 	client := newWebhookTestClient(t)
 	defer func() { _ = client.Close() }()
@@ -255,12 +356,21 @@ func TestWebhookRejectsInvalidConfigurationAndOversizedBodies(t *testing.T) {
 	invalid := NewWebhookHandler(client, "", "")
 	recorder := performWebhookRequest(invalid, []byte(`{}`), "")
 	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
-	_, err = NewWebhookHandlerWithError(client, "short", "verify")
+	shortKeyHandler, err := NewWebhookHandlerWithError(client, "short", "verify")
+	require.NoError(t, err)
+	require.NoError(t, shortKeyHandler.Shutdown(context.Background()))
+	_, err = NewWebhookHandlerWithError(client, strings.Repeat("x", 33), "verify")
 	require.ErrorContains(t, err, "encryptKey")
 	_, err = NewWebhookHandlerWithError(client, "", "verify", WithWebhookDeduplicator(nil))
 	require.ErrorContains(t, err, "去重器")
+	_, err = NewWebhookHandlerWithError(client, "", "verify", WithWebhookTransactionalDeduplicator(nil))
+	require.ErrorContains(t, err, "事务型去重器")
 	_, err = NewWebhookHandlerWithError(client, "", "verify", WithWebhookDedupTTL(0))
 	require.ErrorContains(t, err, "TTL")
+	_, err = NewWebhookHandlerWithError(client, "", "verify", WithWebhookProcessingTTL(0))
+	require.ErrorContains(t, err, "处理租约")
+	_, err = NewWebhookHandlerWithError(client, "", "verify", WithWebhookAckMode(WebhookAckMode(99)))
+	require.ErrorContains(t, err, "确认模式")
 	_, err = NewWebhookHandlerWithError(client, "", "verify", WithWebhookDispatch(1, 2))
 	require.ErrorContains(t, err, "派发")
 
@@ -295,7 +405,10 @@ func TestWebhookQueueBackpressureDoesNotDeduplicateRejectedEvent(t *testing.T) {
 
 	first := webhookPayload(t, 1, textWebhookEvent("verify", "first"))
 	second := webhookPayload(t, 2, textWebhookEvent("verify", "second"))
-	require.Equal(t, http.StatusOK, performWebhookRequest(handler, first, "").Code)
+	firstResult := make(chan int, 1)
+	go func() {
+		firstResult <- performWebhookRequest(handler, first, "").Code
+	}()
 	select {
 	case <-started:
 	case <-time.After(time.Second):
@@ -303,6 +416,7 @@ func TestWebhookQueueBackpressureDoesNotDeduplicateRejectedEvent(t *testing.T) {
 	}
 	require.Equal(t, http.StatusServiceUnavailable, performWebhookRequest(handler, second, "").Code)
 	close(release)
+	require.Equal(t, http.StatusOK, <-firstResult)
 	require.Equal(t, 1, receiveInt(t, received))
 
 	require.Equal(t, http.StatusOK, performWebhookRequest(handler, second, "").Code)
