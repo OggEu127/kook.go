@@ -10,10 +10,10 @@ import (
 
 func main() {
 	// 从环境变量获取Token
-	token := os.Getenv("KOOK_BOT_TOKEN")
+	token := os.Getenv("KOOK_TOKEN")
 	if token == "" {
-		log.Println("请设置环境变量 KOOK_BOT_TOKEN")
-		log.Println("示例: export KOOK_BOT_TOKEN=Bot_your_token_here")
+		log.Println("请设置环境变量 KOOK_TOKEN")
+		log.Println("示例: export KOOK_TOKEN=your_token_here")
 		return
 	}
 
@@ -50,5 +50,5 @@ func main() {
 
 	log.Println("\nSDK 功能测试完成！")
 	log.Println("查看 examples/ 目录了解更多用法")
-	log.Println("查看 DETAILED_GUIDE.md 了解完整 API")
+	log.Println("查看 README.md 和在线使用指南了解完整 API")
 }

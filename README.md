@@ -13,7 +13,7 @@
 ## 安装
 
 ```bash
-go get github.com/OggEu127/kook.go
+go get github.com/OggEu127/kook.go@v1.2.0
 ```
 
 README 描述当前分支。使用已发布版本时，建议固定版本号，并以对应 Git tag 中的文档为准。
@@ -63,7 +63,7 @@ if err := ws.Connect(); err != nil {
 // Connect 建立连接后返回；应用应继续运行，退出时调用 Close。
 ```
 
-WebSocket 使用有界事件队列。只有处理器执行完成后才提交用于恢复连接的 SN；队列溢出、乱序缓冲溢出或序列缺口超时会关闭当前连接并尝试重连。重放可能产生重复事件，因此业务处理器应具备幂等性并尽快返回。
+WebSocket 使用有界事件队列。只有处理器执行完成后才提交用于恢复连接的 SN；队列溢出、乱序缓冲溢出或序列缺口超时会关闭当前连接并从已提交 SN 重放。Resume 支持 `sn=0` 和确认前到达的重放事件；后台重连使用有上限的指数退避并持续到成功或 `Close`。重放可能产生重复事件，因此业务处理器应具备幂等性并尽快返回。
 
 ## Webhook
 
@@ -81,12 +81,28 @@ if err != nil {
 // 退出时使用带截止时间的 context 调用 handler.Shutdown(ctx)。
 ```
 
-Webhook 默认拒绝空 `verify_token`，限制压缩请求体为 1 MiB、解压后为 8 MiB，并使用容量 256 的单 worker 顺序队列。队列满时返回 503，且不会写入去重状态。内建服务器使用私有 mux 和 HTTP 超时；完整程序见 [webhook_bot](examples/webhook_bot/main.go)。
+Webhook 默认拒绝空 `verify_token`，限制压缩请求体为 1 MiB、解压后为 8 MiB，并使用容量 256 的单 worker 顺序队列。默认只有在业务处理器成功返回并提交去重状态后才响应 200；panic、队列满和处理中重复请求不会被永久去重，KOOK 可以重投。事件键同时包含 SN 和负载摘要，避免 SN 回卷碰撞。短 Encrypt Key 按 KOOK 算法补零到 32 字节；超过 32 字节会在构造时拒绝。
+
+多实例默认确认模式需要实现 `WebhookTransactionalDeduplicator`，并通过 `WithWebhookTransactionalDeduplicator` 注入；预留令牌会防止过期 worker 误提交新租约。仅兼容旧 `WebhookDeduplicator` 的存储必须显式选择 `WithWebhookAckMode(kook.WebhookAckAfterEnqueue)`，并自行保证入队后持久化。内建服务器使用私有 mux 和 HTTP 超时；完整程序见 [webhook_bot](examples/webhook_bot/main.go)。
+
+## 邀请用户与留存统计
+
+```go
+status := kook.InviteeStatusAll
+invitees, err := client.Invite.GetInvitees(ctx, kook.InviteeListParams{
+	GuildID:  guildID,
+	Status:   &status,
+	Page:     1,
+	PageSize: 20,
+})
+```
+
+`GetInvitees` 对应官方 `GET invite/invitees`，支持邀请码、邀请 URL、服务器、状态和时间范围筛选，返回受邀用户列表以及 `Count`、`KeepCount`、`LossCount` 统计。
 
 ## 请求、限流与重试
 
 - JSON、multipart 和 Badge 二进制请求共享限流、重试与错误解析逻辑。
-- `GET`、`HEAD`、`PUT`、`DELETE` 属于可安全重试的方法。
+- `GET`、`HEAD`、`OPTIONS`、`PUT`、`DELETE` 属于可安全重试的方法；被多层包装的超时和常见连接错误也会被识别。
 - `POST`、`PATCH` 默认仅在服务端明确返回 429 时重试；`RetryNonIdempotent` 会放宽限制，也会增加重复写入风险。
 - `MaxRetries` 表示首次请求之外的最大重试次数；`MaxRetries: 3` 最多执行 4 次请求。
 - `Retry-After` 支持秒数和 HTTP-date，等待可以被 `context` 取消。

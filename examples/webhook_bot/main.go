@@ -15,13 +15,17 @@ func main() {
 	// 从环境变量获取配置
 	token := os.Getenv("KOOK_TOKEN")
 	verifyToken := os.Getenv("KOOK_VERIFY_TOKEN")
+	encryptKey := os.Getenv("KOOK_ENCRYPT_KEY")
 
 	if token == "" || verifyToken == "" {
 		log.Fatal("请设置环境变量 KOOK_TOKEN 和 KOOK_VERIFY_TOKEN")
 	}
 
 	// 创建客户端
-	client := kook.NewClient(token)
+	client, err := kook.NewClientWithError(token)
+	if err != nil {
+		log.Fatalf("创建客户端失败: %v", err)
+	}
 	defer func() { _ = client.Close() }()
 
 	// 获取机器人信息
@@ -33,7 +37,7 @@ func main() {
 	log.Printf("机器人启动成功: %s#%s", user.Username, user.IdentifyNum)
 
 	// 创建Webhook处理器
-	webhook, err := kook.NewWebhookHandlerWithError(client, "", verifyToken)
+	webhook, err := kook.NewWebhookHandlerWithError(client, encryptKey, verifyToken)
 	if err != nil {
 		log.Fatalf("创建Webhook处理器失败: %v", err)
 	}
@@ -57,7 +61,9 @@ func main() {
 				Type:     &messageType,
 			}
 
-			_, err := client.Message.Create(context.Background(), params)
+			sendCtx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			defer cancel()
+			_, err := client.Message.Create(sendCtx, params)
 			if err != nil {
 				log.Printf("发送消息失败: %v", err)
 			}

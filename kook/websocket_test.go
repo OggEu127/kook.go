@@ -147,11 +147,17 @@ func TestWebSocketHelloResumeReconnectAndPong(t *testing.T) {
 
 	ws.stateMu.Lock()
 	ws.gatewayURL = "wss://example.test/gateway?compress=1"
-	ws.sn = 9
+	ws.sn = 0
 	ws.stateMu.Unlock()
 	resumeURL, err := url.Parse(ws.resumeGatewayURL())
 	require.NoError(t, err)
 	require.Equal(t, "1", resumeURL.Query().Get("resume"))
+	require.Equal(t, "0", resumeURL.Query().Get("sn"))
+	require.Equal(t, "session", resumeURL.Query().Get("session_id"))
+
+	ws.setSN(9)
+	resumeURL, err = url.Parse(ws.resumeGatewayURL())
+	require.NoError(t, err)
 	require.Equal(t, "9", resumeURL.Query().Get("sn"))
 	require.Equal(t, "session", resumeURL.Query().Get("session_id"))
 
@@ -165,6 +171,104 @@ func TestWebSocketHelloResumeReconnectAndPong(t *testing.T) {
 	require.Empty(t, ws.getSessionID())
 	require.Zero(t, ws.getSN())
 	require.Empty(t, ws.resumeGatewayURL())
+}
+
+func TestWebSocketResumeAcceptsReplayBeforeAckAtSNZero(t *testing.T) {
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	queryValues := make(chan url.Values, 1)
+	replayedMessage := websocketEventMessage(t, 1, MessageTypeText, "replayed", map[string]any{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		conn, err := upgrader.Upgrade(w, request, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		queryValues <- request.URL.Query()
+		if err := conn.WriteJSON(replayedMessage); err != nil {
+			return
+		}
+		if err := conn.WriteJSON(WebSocketMessage{S: SignalResumeAck}); err != nil {
+			return
+		}
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	client := newWebhookTestClient(t)
+	defer func() { _ = client.Close() }()
+	ws := NewWebSocketClient(client, false)
+	defer func() { _ = ws.Close() }()
+	ws.stateMu.Lock()
+	ws.gatewayURL = "ws" + strings.TrimPrefix(server.URL, "http")
+	ws.sessionID = "resume-session"
+	ws.sn = 0
+	ws.stateMu.Unlock()
+	received := make(chan int, 1)
+	ws.OnMessage(MessageTypeText, func(event *MessageEvent) { received <- event.SN })
+
+	require.NoError(t, ws.doConnect())
+	query := <-queryValues
+	require.Equal(t, "1", query.Get("resume"))
+	require.Equal(t, "0", query.Get("sn"))
+	require.Equal(t, "resume-session", query.Get("session_id"))
+	require.Equal(t, 1, receiveInt(t, received))
+	require.Eventually(t, func() bool { return ws.getSN() == 1 }, time.Second, time.Millisecond)
+}
+
+func TestWebSocketBackgroundReconnectContinuesPastInitialAttemptLimit(t *testing.T) {
+	var attempts atomic.Int32
+	var gatewayURL string
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v3/gateway/index":
+			_, _ = fmt.Fprintf(w, `{"code":0,"data":{"url":%q}}`, gatewayURL)
+		case "/gateway":
+			if attempts.Add(1) <= 2 {
+				http.Error(w, "retry", http.StatusServiceUnavailable)
+				return
+			}
+			conn, err := upgrader.Upgrade(w, request, nil)
+			if err != nil {
+				return
+			}
+			defer func() { _ = conn.Close() }()
+			hello, _ := json.Marshal(HelloMessage{Code: 0, SessionID: "reconnected"})
+			if err := conn.WriteJSON(WebSocketMessage{S: SignalHello, D: hello}); err != nil {
+				return
+			}
+			for {
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+			}
+		default:
+			http.NotFound(w, request)
+		}
+	}))
+	defer server.Close()
+	gatewayURL = "ws" + strings.TrimPrefix(server.URL, "http") + "/gateway"
+
+	client := NewClient("token", WithBaseURL(server.URL+"/api"), WithoutRateLimit(), WithoutRetry())
+	defer func() { _ = client.Close() }()
+	ws := NewWebSocketClient(client, false, WebSocketOptions{
+		ReconnectInitialDelay: time.Millisecond,
+		ReconnectMaxDelay:     2 * time.Millisecond,
+	})
+	defer func() { _ = ws.Close() }()
+	ws.maxReconnects = 1
+
+	ws.attemptReconnect()
+	require.True(t, ws.IsConnected())
+	require.Equal(t, int32(3), attempts.Load())
+	require.Equal(t, "reconnected", ws.getSessionID())
+	require.Equal(t, time.Millisecond, websocketReconnectDelay(time.Millisecond, 4*time.Millisecond, 1))
+	require.Equal(t, 2*time.Millisecond, websocketReconnectDelay(time.Millisecond, 4*time.Millisecond, 2))
+	require.Equal(t, 4*time.Millisecond, websocketReconnectDelay(time.Millisecond, 4*time.Millisecond, 8))
 }
 
 func TestWebSocketRespondsToServerPing(t *testing.T) {
