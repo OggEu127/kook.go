@@ -148,7 +148,14 @@ func TestKOOKReadOnlyIntegration(t *testing.T) {
 			return err
 		}},
 		{"invitees", func() error {
-			_, err := client.Invite.GetInvitees(ctx, InviteeListParams{GuildID: env["KOOK_TEST_GUILD_ID"], Status: testPtr(InviteeStatusAll), Page: 1, PageSize: 10})
+			invites, err := client.Invite.GetInviteList(ctx, InviteListParams{GuildID: env["KOOK_TEST_GUILD_ID"], Page: testPtr(1), PageSize: testPtr(10)})
+			if err != nil {
+				return err
+			}
+			if len(invites.Items) == 0 {
+				return fmt.Errorf("invitees test requires an existing invite in guild %s", env["KOOK_TEST_GUILD_ID"])
+			}
+			_, err = client.Invite.GetInvitees(ctx, InviteeListParams{ID: invites.Items[0].URLCode, GuildID: env["KOOK_TEST_GUILD_ID"], Status: testPtr(InviteeStatusAll), Page: 1, PageSize: 10})
 			return err
 		}},
 		{"intimacy", func() error {

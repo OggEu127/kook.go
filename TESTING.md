@@ -18,7 +18,7 @@ git diff --check
 
 ## 真实只读集成测试
 
-不带 `-short` 的 `TestKOOKReadOnlyIntegration` 只读取现有资源，不创建、修改或删除 KOOK 数据。它也覆盖 `invite/invitees` 的受邀用户与留存统计查询。运行前安全注入下列环境变量：
+不带 `-short` 的 `TestKOOKReadOnlyIntegration` 只读取现有资源，不创建、修改或删除 KOOK 数据。它也覆盖 `invite/invitees` 的受邀用户与留存统计查询，并会自动选取测试服务器中的第一个现有邀请；该服务器必须至少有一条邀请。运行前安全注入下列环境变量：
 
 ```text
 KOOK_TOKEN
