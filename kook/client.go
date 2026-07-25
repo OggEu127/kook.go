@@ -654,11 +654,17 @@ func sanitizedURL(rawURL string) string {
 	if err != nil {
 		return "[INVALID URL]"
 	}
+	isInviteesEndpoint := strings.HasSuffix(strings.TrimRight(u.Path, "/"), "/invite/invitees")
 	query := u.Query()
 	for key := range query {
-		switch strings.ToLower(key) {
+		lowerKey := strings.ToLower(key)
+		switch lowerKey {
 		case "access_token", "token", "code", "client_secret", "ticket", "session_id", "gateway_token", "authorization":
 			query.Set(key, "[REDACTED]")
+		case "id", "invite_url":
+			if isInviteesEndpoint {
+				query.Set(key, "[REDACTED]")
+			}
 		}
 	}
 	u.RawQuery = query.Encode()

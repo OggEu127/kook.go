@@ -90,6 +90,7 @@ Webhook 默认拒绝空 `verify_token`，限制压缩请求体为 1 MiB、解压
 ```go
 status := kook.InviteeStatusAll
 invitees, err := client.Invite.GetInvitees(ctx, kook.InviteeListParams{
+	ID:       inviteCode,
 	GuildID:  guildID,
 	Status:   &status,
 	Page:     1,
@@ -97,7 +98,7 @@ invitees, err := client.Invite.GetInvitees(ctx, kook.InviteeListParams{
 })
 ```
 
-`GetInvitees` 对应官方 `GET invite/invitees`，支持邀请码、邀请 URL、服务器、状态和时间范围筛选，返回受邀用户列表以及 `Count`、`KeepCount`、`LossCount` 统计。
+`GetInvitees` 对应官方 `GET invite/invitees`，支持邀请码、邀请 URL、服务器、状态和时间范围筛选，返回受邀用户列表以及 `Count`、`KeepCount`、`LossCount` 统计。机器人只读查询应传入现有邀请码或邀请 URL；仅传服务器 ID 可能被 KOOK 拒绝。
 
 ## 请求、限流与重试
 
@@ -106,7 +107,7 @@ invitees, err := client.Invite.GetInvitees(ctx, kook.InviteeListParams{
 - `POST`、`PATCH` 默认仅在服务端明确返回 429 时重试；`RetryNonIdempotent` 会放宽限制，也会增加重复写入风险。
 - `MaxRetries` 表示首次请求之外的最大重试次数；`MaxRetries: 3` 最多执行 4 次请求。
 - `Retry-After` 支持秒数和 HTTP-date，等待可以被 `context` 取消。
-- 日志不会输出请求体、响应体或凭据；URL 中的 Token、授权码和 Client Secret 会被脱敏。
+- 日志不会输出请求体、响应体或凭据；URL 中的 Token、授权码、Client Secret、邀请码和邀请 URL 会被脱敏。
 
 ## v1.1.1 兼容边界
 

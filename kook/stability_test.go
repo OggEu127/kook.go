@@ -328,3 +328,13 @@ func TestSanitizedURLHandlesSensitiveKeysCaseInsensitively(t *testing.T) {
 	require.True(t, strings.Contains(result, "safe=value"))
 	require.True(t, errors.Is(ErrUnsupportedEndpoint, ErrUnsupportedEndpoint))
 }
+
+func TestSanitizedURLRedactsInviteCredentials(t *testing.T) {
+	result := sanitizedURL("https://www.kookapp.cn/api/v3/invite/invitees?id=invite-secret&invite_url=https%3A%2F%2Fkook.vip%2Finvite-url-secret&guild_id=guild")
+
+	require.NotContains(t, result, "invite-secret")
+	require.NotContains(t, result, "invite-url-secret")
+	require.Contains(t, result, "guild_id=guild")
+	require.Contains(t, result, "%5BREDACTED%5D")
+	require.Contains(t, sanitizedURL("https://www.kookapp.cn/api/v3/channel/view?id=resource-id"), "id=resource-id")
+}

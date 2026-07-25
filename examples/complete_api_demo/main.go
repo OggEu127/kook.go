@@ -97,16 +97,18 @@ func main() {
 				for _, invite := range invites.Items {
 					fmt.Printf("- 邀请码: %s, 创建者: %s\n", invite.URLCode, invite.User.Username)
 				}
-			}
 
-			inviteeStatus := kook.InviteeStatusAll
-			invitees, err := client.Invite.GetInvitees(context.Background(), kook.InviteeListParams{
-				GuildID: guild.ID, Status: &inviteeStatus, Page: 1, PageSize: pageSize,
-			})
-			if err != nil {
-				log.Printf("获取受邀用户统计失败: %v", err)
-			} else {
-				fmt.Printf("受邀统计: 总数=%d, 留存=%d, 流失=%d\n", invitees.Count, invitees.KeepCount, invitees.LossCount)
+				if len(invites.Items) > 0 {
+					inviteeStatus := kook.InviteeStatusAll
+					invitees, err := client.Invite.GetInvitees(context.Background(), kook.InviteeListParams{
+						ID: invites.Items[0].URLCode, GuildID: guild.ID, Status: &inviteeStatus, Page: 1, PageSize: pageSize,
+					})
+					if err != nil {
+						log.Printf("获取受邀用户统计失败: %v", err)
+					} else {
+						fmt.Printf("受邀统计: 总数=%d, 留存=%d, 流失=%d\n", invitees.Count, invitees.KeepCount, invitees.LossCount)
+					}
+				}
 			}
 
 		}
