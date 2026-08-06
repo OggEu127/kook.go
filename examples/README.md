@@ -118,6 +118,7 @@ go run main.go
 - HTTP服务器接收KOOK事件
 - 适合服务器部署使用
 - 使用与WebSocket相同的事件处理API
+- 业务处理正常返回后再响应200，并在失败时释放去重预留
 
 **主要特性**:
 - 启动HTTP服务器监听Webhook
@@ -132,6 +133,9 @@ export KOOK_TOKEN="你的机器人令牌"
 
 # 必需（用于验证请求来源；空值会失败关闭）
 export KOOK_VERIFY_TOKEN="你的验证令牌"
+
+# 可选（开发者平台启用加密时填写）
+export KOOK_ENCRYPT_KEY="你的加密 Key"
 ```
 
 **运行方法**:

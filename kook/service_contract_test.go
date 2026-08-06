@@ -31,7 +31,7 @@ type serviceContract struct {
 
 func TestOfficialServiceContracts(t *testing.T) {
 	contracts := officialServiceContracts()
-	require.Len(t, contracts, 101)
+	require.Len(t, contracts, 102)
 	seen := make(map[string]struct{}, len(contracts))
 
 	for _, contract := range contracts {
@@ -738,6 +738,21 @@ func utilityContracts() []serviceContract {
 			Invoke: func(ctx context.Context, client *Client, _ string) error {
 				_, err := client.Invite.GetInviteList(ctx, InviteListParams{
 					GuildID: "g", ChannelID: "c", Page: testPtr(1), PageSize: testPtr(20),
+				})
+				return err
+			},
+		},
+		{
+			Name: contractName("invite/invitees"), Method: http.MethodGet, Endpoint: "invite/invitees",
+			Query: map[string]string{
+				"id": "code", "invite_url": "https://kook.vip/code", "guild_id": "g", "status": "-1",
+				"start_time": "2026-06-01 12:00:00", "end_time": "2026-07-01 12:00:00", "page": "1", "page_size": "20",
+			},
+			Data: `{"items":[{"status":0,"joined_time":1773643290000,"active_time":1773643289899,"show_name":"user#0001"}],"meta":{"page":1,"page_total":1,"page_size":20,"total":1},"sort":{},"count":1,"keep_count":1,"loss_count":0}`,
+			Invoke: func(ctx context.Context, client *Client, _ string) error {
+				_, err := client.Invite.GetInvitees(ctx, InviteeListParams{
+					ID: "code", InviteURL: "https://kook.vip/code", GuildID: "g", Status: testPtr(InviteeStatusAll),
+					StartTime: "2026-06-01 12:00:00", EndTime: "2026-07-01 12:00:00", Page: 1, PageSize: 20,
 				})
 				return err
 			},

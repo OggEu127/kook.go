@@ -12,6 +12,29 @@ type InviteService struct {
 	client *Client
 }
 
+// GetInvitees 获取通过邀请链接加入服务器的用户统计。
+func (s *InviteService) GetInvitees(ctx context.Context, params InviteeListParams) (*ListInviteesResponse, error) {
+	if params.Page <= 0 {
+		return nil, NewValidationErrorWithValue("page", "必须大于0", strconv.Itoa(params.Page))
+	}
+	if params.PageSize <= 0 {
+		return nil, NewValidationErrorWithValue("page_size", "必须大于0", strconv.Itoa(params.PageSize))
+	}
+	if params.Status != nil && *params.Status != InviteeStatusActive && *params.Status != InviteeStatusLeft && *params.Status != InviteeStatusAll {
+		return nil, NewValidationErrorWithValue("status", "必须为-1、0或254", strconv.Itoa(*params.Status))
+	}
+
+	resp, err := s.client.Get(ctx, "invite/invitees", params.toQuery())
+	if err != nil {
+		return nil, err
+	}
+	var result ListInviteesResponse
+	if err := json.Unmarshal(resp.Data, &result); err != nil {
+		return nil, fmt.Errorf("解析受邀用户列表失败: %w", err)
+	}
+	return &result, nil
+}
+
 // GetInviteList 获取邀请列表。
 func (s *InviteService) GetInviteList(ctx context.Context, args ...any) (*ListInvitesResponse, error) {
 	params, err := compatParams("GetInviteList", args, func(args []any) (InviteListParams, bool) {
@@ -130,6 +153,45 @@ type InviteListParams struct {
 	PageSize  *int
 }
 
+// InviteeListParams 是受邀用户与邀请留存统计的查询参数。
+// Page和PageSize是KOOK接口要求的必填字段。
+type InviteeListParams struct {
+	ID        string
+	InviteURL string
+	GuildID   string
+	Status    *int
+	StartTime string
+	EndTime   string
+	Page      int
+	PageSize  int
+}
+
+func (p InviteeListParams) toQuery() map[string]string {
+	query := map[string]string{
+		"page":      strconv.Itoa(p.Page),
+		"page_size": strconv.Itoa(p.PageSize),
+	}
+	if p.ID != "" {
+		query["id"] = p.ID
+	}
+	if p.InviteURL != "" {
+		query["invite_url"] = p.InviteURL
+	}
+	if p.GuildID != "" {
+		query["guild_id"] = p.GuildID
+	}
+	if p.Status != nil {
+		query["status"] = strconv.Itoa(*p.Status)
+	}
+	if p.StartTime != "" {
+		query["start_time"] = p.StartTime
+	}
+	if p.EndTime != "" {
+		query["end_time"] = p.EndTime
+	}
+	return query
+}
+
 func (p InviteListParams) toQuery() map[string]string {
 	query := make(map[string]string)
 	if p.GuildID != "" {
@@ -169,6 +231,35 @@ type ListInvitesResponse struct {
 	Meta  PaginationMeta `json:"meta"`
 	Sort  SortFields     `json:"sort"`
 }
+
+// Invitee 是一条受邀用户记录。JoinedTime和ActiveTime是毫秒时间戳。
+type Invitee struct {
+	Status     int    `json:"status"`
+	JoinedTime int64  `json:"joined_time"`
+	ActiveTime int64  `json:"active_time"`
+	ShowName   string `json:"show_name"`
+}
+
+// ListInviteesResponse 是受邀用户列表及留存统计。
+type ListInviteesResponse struct {
+	Items     []Invitee      `json:"items"`
+	Meta      PaginationMeta `json:"meta"`
+	Sort      SortFields     `json:"sort"`
+	Count     int            `json:"count"`
+	KeepCount int            `json:"keep_count"`
+	LossCount int            `json:"loss_count"`
+}
+
+// InviteesParams和InviteesResponse保留较直观的复数命名别名。
+type InviteesParams = InviteeListParams
+type InviteesResponse = ListInviteesResponse
+
+// 受邀用户状态。KOOK使用254表示已退出服务器。
+const (
+	InviteeStatusAll    = -1
+	InviteeStatusActive = 0
+	InviteeStatusLeft   = 254
+)
 
 // 邀请有效期常量
 const (

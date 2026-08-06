@@ -15,6 +15,7 @@ func main() {
 	// 从环境变量获取配置
 	token := os.Getenv("KOOK_TOKEN")
 	verifyToken := os.Getenv("KOOK_VERIFY_TOKEN")
+	encryptKey := os.Getenv("KOOK_ENCRYPT_KEY")
 
 	if token == "" || verifyToken == "" {
 		log.Fatal("请设置环境变量 KOOK_TOKEN 和 KOOK_VERIFY_TOKEN")
@@ -57,7 +58,9 @@ func main() {
 				Type:     &messageType,
 			}
 
-			_, err := client.Message.Create(context.Background(), params)
+			sendCtx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			defer cancel()
+			_, err := client.Message.Create(sendCtx, params)
 			if err != nil {
 				log.Printf("发送消息失败: %v", err)
 			}

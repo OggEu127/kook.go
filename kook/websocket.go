@@ -20,25 +20,29 @@ import (
 
 // WebSocketOptions WebSocket客户端配置。
 type WebSocketOptions struct {
-	ReadLimit         int64
-	ReadTimeout       time.Duration
-	HelloTimeout      time.Duration
-	PongTimeout       time.Duration
-	MaxEventBuffer    int
-	EventBufferTTL    time.Duration
-	DispatchQueueSize int
+	ReadLimit             int64
+	ReadTimeout           time.Duration
+	HelloTimeout          time.Duration
+	PongTimeout           time.Duration
+	MaxEventBuffer        int
+	EventBufferTTL        time.Duration
+	DispatchQueueSize     int
+	ReconnectInitialDelay time.Duration
+	ReconnectMaxDelay     time.Duration
 }
 
 // DefaultWebSocketOptions 返回默认WebSocket配置。
 func DefaultWebSocketOptions() WebSocketOptions {
 	return WebSocketOptions{
-		ReadLimit:         8 << 20,
-		ReadTimeout:       90 * time.Second,
-		HelloTimeout:      6 * time.Second,
-		PongTimeout:       6 * time.Second,
-		MaxEventBuffer:    1024,
-		EventBufferTTL:    30 * time.Second,
-		DispatchQueueSize: 256,
+		ReadLimit:             8 << 20,
+		ReadTimeout:           90 * time.Second,
+		HelloTimeout:          6 * time.Second,
+		PongTimeout:           6 * time.Second,
+		MaxEventBuffer:        1024,
+		EventBufferTTL:        30 * time.Second,
+		DispatchQueueSize:     256,
+		ReconnectInitialDelay: 5 * time.Second,
+		ReconnectMaxDelay:     60 * time.Second,
 	}
 }
 
@@ -83,7 +87,6 @@ type WebSocketClient struct {
 	gatewayURL      string
 	reconnectCount  int
 	maxReconnects   int
-	reconnectDelay  time.Duration
 	isConnected     bool
 	ecosystemOnline bool
 	connMu          sync.RWMutex
@@ -227,6 +230,12 @@ func mergeWebSocketOptions(defaults, override WebSocketOptions) WebSocketOptions
 	if override.DispatchQueueSize != 0 {
 		defaults.DispatchQueueSize = override.DispatchQueueSize
 	}
+	if override.ReconnectInitialDelay != 0 {
+		defaults.ReconnectInitialDelay = override.ReconnectInitialDelay
+	}
+	if override.ReconnectMaxDelay != 0 {
+		defaults.ReconnectMaxDelay = override.ReconnectMaxDelay
+	}
 	return defaults
 }
 
@@ -307,11 +316,9 @@ func (ws *WebSocketClient) connectWithRetry() error {
 		ws.client.logger.Errorf("WebSocket连接失败，尝试 %d/%d", attempts+1, ws.maxReconnects+1)
 
 		if attempts < ws.maxReconnects {
-			select {
-			case <-ws.ctx.Done():
-				return ws.ctx.Err()
-			case <-time.After(ws.reconnectDelay * time.Duration(attempts+1)):
-				// 指数退避
+			delay := websocketReconnectDelay(ws.options.ReconnectInitialDelay, ws.options.ReconnectMaxDelay, attempts+1)
+			if err := waitForWebSocketRetry(ws.ctx, delay); err != nil {
+				return err
 			}
 		}
 	}
@@ -327,6 +334,7 @@ func (ws *WebSocketClient) doConnect() error {
 	}
 
 	connectURL := ws.resumeGatewayURL()
+	resuming := connectURL != ""
 	if connectURL == "" {
 		gateway, err := ws.client.Gateway.GetGateway(ws.ctx, GatewayParams{Compress: &compress})
 		if err != nil {
@@ -353,7 +361,8 @@ func (ws *WebSocketClient) doConnect() error {
 	if err != nil {
 		return fmt.Errorf("WebSocket连接失败: %w", err)
 	}
-	if err := ws.waitHello(conn); err != nil {
+	replayed, err := ws.waitHello(conn, resuming)
+	if err != nil {
 		_ = conn.Close()
 		return err
 	}
@@ -382,9 +391,9 @@ func (ws *WebSocketClient) doConnect() error {
 	return nil
 }
 
-func (ws *WebSocketClient) waitHello(conn *websocket.Conn) error {
+func (ws *WebSocketClient) waitHello(conn *websocket.Conn, resuming bool) ([]*WebSocketMessage, error) {
 	if conn == nil {
-		return fmt.Errorf("WebSocket连接不可用")
+		return nil, fmt.Errorf("WebSocket连接不可用")
 	}
 	if ws.options.ReadLimit > 0 {
 		conn.SetReadLimit(ws.options.ReadLimit)
@@ -393,13 +402,66 @@ func (ws *WebSocketClient) waitHello(conn *websocket.Conn) error {
 		_ = conn.SetReadDeadline(time.Now().Add(ws.options.HelloTimeout))
 	}
 
-	msg, err := ws.readWebSocketMessage(conn)
-	if err != nil {
-		var netErr net.Error
-		if errors.As(err, &netErr) && netErr.Timeout() {
-			return fmt.Errorf("等待Hello消息超时: %w", err)
+	replayed := make([]*WebSocketMessage, 0)
+	for {
+		msg, err := ws.readWebSocketMessage(conn)
+		if err != nil {
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				return nil, fmt.Errorf("等待WebSocket握手超时: %w", err)
+			}
+			return nil, fmt.Errorf("读取WebSocket握手消息失败: %w", err)
 		}
-		return fmt.Errorf("读取Hello消息失败: %w", err)
+		switch msg.S {
+		case SignalEvent:
+			if !resuming {
+				return nil, fmt.Errorf("建立新会话时在Hello前收到事件")
+			}
+			if len(replayed) >= ws.options.MaxEventBuffer {
+				return nil, ErrEventBufferFull
+			}
+			replayed = append(replayed, msg)
+		case SignalHello:
+			if len(replayed) > 0 {
+				return nil, fmt.Errorf("Resume重放事件后收到新的Hello会话")
+			}
+			if resuming {
+				ws.resetSequenceForFreshSession()
+			}
+			if err := ws.handleHello(msg); err != nil {
+				return nil, err
+			}
+			ws.refreshReadDeadline(conn)
+			return replayed, nil
+		case SignalResumeAck:
+			if !resuming || ws.getSessionID() == "" {
+				return nil, fmt.Errorf("收到ResumeAck但本地没有可恢复会话")
+			}
+			if err := ws.handleResumeAck(msg); err != nil {
+				return nil, err
+			}
+			ws.startHeartbeat()
+			ws.refreshReadDeadline(conn)
+			return replayed, nil
+		case SignalPing:
+			pingSN := msg.SN
+			if pingSN == 0 && msg.D != nil {
+				var ping PingMessage
+				if err := json.Unmarshal(msg.D, &ping); err != nil {
+					return nil, fmt.Errorf("解析握手Ping失败: %w", err)
+				}
+				pingSN = ping.SN
+			}
+			if err := writeWebSocketMessage(conn, &WebSocketMessage{S: SignalPong, SN: pingSN}); err != nil {
+				return nil, fmt.Errorf("回复握手Ping失败: %w", err)
+			}
+		case SignalPong:
+			// 握手阶段没有待确认的客户端Ping，忽略服务端Pong。
+		case SignalReconnect:
+			return nil, fmt.Errorf("WebSocket握手阶段收到重新连接信令")
+		default:
+			return nil, fmt.Errorf("WebSocket握手阶段收到未知信令=%d", msg.S)
+		}
 	}
 	switch msg.S {
 	case SignalHello:
@@ -434,7 +496,7 @@ func (ws *WebSocketClient) resumeGatewayURL() string {
 	sessionID := ws.sessionID
 	sn := ws.sn
 	ws.stateMu.RUnlock()
-	if gatewayURL == "" || sessionID == "" || sn <= 0 {
+	if gatewayURL == "" || sessionID == "" || sn < 0 {
 		return ""
 	}
 
@@ -566,15 +628,10 @@ func (ws *WebSocketClient) attemptReconnect() {
 
 	for ws.ctx.Err() == nil {
 		reconnectCount := ws.incrementReconnectCount()
-		if reconnectCount > ws.maxReconnects {
-			ws.client.logger.Error("已达到最大重连次数，停止重连")
-			return
-		}
 		ws.client.logger.Infof("开始第 %d 次重连尝试", reconnectCount)
 
-		select {
-		case <-time.After(ws.reconnectDelay * time.Duration(reconnectCount)):
-		case <-ws.ctx.Done():
+		delay := websocketReconnectDelay(ws.options.ReconnectInitialDelay, ws.options.ReconnectMaxDelay, reconnectCount)
+		if err := waitForWebSocketRetry(ws.ctx, delay); err != nil {
 			return
 		}
 
@@ -585,6 +642,34 @@ func (ws *WebSocketClient) attemptReconnect() {
 		ws.client.logger.Info("重连成功")
 		ws.setReconnectCount(0)
 		return
+	}
+}
+
+func websocketReconnectDelay(initialDelay, maxDelay time.Duration, attempt int) time.Duration {
+	if attempt <= 1 || initialDelay >= maxDelay {
+		return initialDelay
+	}
+	delay := initialDelay
+	for current := 1; current < attempt; current++ {
+		if delay >= maxDelay || delay > maxDelay/2 {
+			return maxDelay
+		}
+		delay *= 2
+	}
+	if delay > maxDelay {
+		return maxDelay
+	}
+	return delay
+}
+
+func waitForWebSocketRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -984,8 +1069,18 @@ func (ws *WebSocketClient) sendMessage(msg *WebSocketMessage) error {
 
 	ws.writeMu.Lock()
 	defer ws.writeMu.Unlock()
+	return writeWebSocketMessage(conn, msg)
+}
 
-	return conn.WriteMessage(websocket.TextMessage, data)
+func writeWebSocketMessage(conn *websocket.Conn, msg *WebSocketMessage) error {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("序列化消息失败: %w", err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (ws *WebSocketClient) setSN(sn int) {

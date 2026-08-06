@@ -2,6 +2,7 @@ package kook
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net"
@@ -48,17 +49,18 @@ func IsRetryableError(err error) bool {
 	}
 
 	// URL 错误
-	if urlErr, ok := err.(*url.Error); ok {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
 		return IsRetryableError(urlErr.Err)
 	}
 
 	// 系统调用错误
-	if opErr, ok := err.(*net.OpError); ok {
-		if syscallErr, ok := opErr.Err.(*syscall.Errno); ok {
-			switch *syscallErr {
-			case syscall.ECONNRESET, syscall.ECONNREFUSED, syscall.ETIMEDOUT:
-				return true
-			}
+	var syscallErr syscall.Errno
+	if errors.As(err, &syscallErr) {
+		switch syscallErr {
+		case syscall.ECONNABORTED, syscall.ECONNREFUSED, syscall.ECONNRESET,
+			syscall.EHOSTUNREACH, syscall.ENETUNREACH, syscall.EPIPE, syscall.ETIMEDOUT:
+			return true
 		}
 	}
 

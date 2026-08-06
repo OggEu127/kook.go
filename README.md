@@ -13,7 +13,7 @@
 ## 安装
 
 ```bash
-go get github.com/OggEu127/kook.go
+go get github.com/OggEu127/kook.go@v1.2.0
 ```
 
 README 描述当前分支。使用已发布版本时，建议固定版本号，并以对应 Git tag 中的文档为准。

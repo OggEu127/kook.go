@@ -7,12 +7,14 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +22,7 @@ import (
 
 const (
 	defaultWebhookDedupTTL = 10 * time.Minute
+	defaultWebhookLease    = 30 * time.Second
 	defaultWebhookDedupMax = 10000
 	defaultWebhookMaxBody  = 1 << 20
 	defaultWebhookMaxData  = 8 << 20
@@ -40,12 +43,28 @@ type WebhookDeduplicator interface {
 	CheckAndStore(ctx context.Context, sn int, ttl time.Duration) (duplicate bool, err error)
 }
 
+// WebhookTransactionalDeduplicator 在处理前原子预留事件，在成功后提交，失败时释放。
+// key 同时包含SN和负载摘要，避免SN回卷误判。分布式实现必须原子预留，
+// 并且只有所有权reservation匹配时才能提交或释放，防止过期worker操作新租约。
+type WebhookTransactionalDeduplicator interface {
+	Reserve(ctx context.Context, key string, lease time.Duration) (state WebhookDedupState, reservation string, err error)
+	Complete(ctx context.Context, key, reservation string, ttl time.Duration) error
+	Release(ctx context.Context, key, reservation string) error
+}
+
+type memoryWebhookDedupEntry struct {
+	state       WebhookDedupState
+	reservation string
+	expiresAt   time.Time
+}
+
 // MemoryWebhookDeduplicator 是有界、TTL 型的进程内去重器。
 type MemoryWebhookDeduplicator struct {
-	mu         sync.Mutex
-	entries    map[int]time.Time
-	maxEntries int
-	now        func() time.Time
+	mu              sync.Mutex
+	entries         map[string]memoryWebhookDedupEntry
+	maxEntries      int
+	nextReservation uint64
+	now             func() time.Time
 }
 
 func NewMemoryWebhookDeduplicator(maxEntries int) *MemoryWebhookDeduplicator {
@@ -53,7 +72,7 @@ func NewMemoryWebhookDeduplicator(maxEntries int) *MemoryWebhookDeduplicator {
 		maxEntries = defaultWebhookDedupMax
 	}
 	return &MemoryWebhookDeduplicator{
-		entries:    make(map[int]time.Time),
+		entries:    make(map[string]memoryWebhookDedupEntry),
 		maxEntries: maxEntries,
 		now:        time.Now,
 	}
@@ -63,34 +82,105 @@ func (d *MemoryWebhookDeduplicator) CheckAndStore(_ context.Context, sn int, ttl
 	if sn <= 0 {
 		return false, nil
 	}
+	key := fmt.Sprintf("legacy-sn:%d", sn)
+	state, reservation, err := d.Reserve(context.Background(), key, ttl)
+	if err != nil {
+		return false, err
+	}
+	if state != WebhookDedupAcquired {
+		return true, nil
+	}
+	if err := d.Complete(context.Background(), key, reservation, ttl); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
+func (d *MemoryWebhookDeduplicator) Reserve(_ context.Context, key string, lease time.Duration) (WebhookDedupState, string, error) {
+	if key == "" {
+		return WebhookDedupAcquired, "", nil
+	}
+	if lease <= 0 {
+		lease = defaultWebhookLease
+	}
+	now := d.now()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.cleanupLocked(now)
+	if entry, exists := d.entries[key]; exists && entry.expiresAt.After(now) {
+		if entry.state == WebhookDedupCompleted {
+			return WebhookDedupCompleted, "", nil
+		}
+		return WebhookDedupInFlight, "", nil
+	}
+	if !d.ensureCapacityLocked() {
+		return WebhookDedupInFlight, "", ErrWebhookDedupCapacity
+	}
+	d.nextReservation++
+	reservation := strconv.FormatUint(d.nextReservation, 10)
+	d.entries[key] = memoryWebhookDedupEntry{state: WebhookDedupInFlight, reservation: reservation, expiresAt: now.Add(lease)}
+	return WebhookDedupAcquired, reservation, nil
+}
+
+func (d *MemoryWebhookDeduplicator) Complete(_ context.Context, key, reservation string, ttl time.Duration) error {
+	if key == "" {
+		return nil
+	}
 	if ttl <= 0 {
 		ttl = defaultWebhookDedupTTL
 	}
 	now := d.now()
-
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	for storedSN, expiresAt := range d.entries {
-		if !expiresAt.After(now) {
-			delete(d.entries, storedSN)
+	d.cleanupLocked(now)
+	entry, exists := d.entries[key]
+	if !exists || entry.state != WebhookDedupInFlight || entry.reservation != reservation {
+		return ErrWebhookReservationLost
+	}
+	d.entries[key] = memoryWebhookDedupEntry{state: WebhookDedupCompleted, reservation: reservation, expiresAt: now.Add(ttl)}
+	return nil
+}
+
+func (d *MemoryWebhookDeduplicator) Release(_ context.Context, key, reservation string) error {
+	d.mu.Lock()
+	entry, exists := d.entries[key]
+	if exists && entry.state == WebhookDedupInFlight && entry.reservation == reservation {
+		delete(d.entries, key)
+		d.mu.Unlock()
+		return nil
+	}
+	d.mu.Unlock()
+	return ErrWebhookReservationLost
+}
+
+func (d *MemoryWebhookDeduplicator) cleanupLocked(now time.Time) {
+	for key, entry := range d.entries {
+		if !entry.expiresAt.After(now) {
+			delete(d.entries, key)
 		}
 	}
-	if expiresAt, exists := d.entries[sn]; exists && expiresAt.After(now) {
-		return true, nil
+}
+
+func (d *MemoryWebhookDeduplicator) ensureCapacityLocked() bool {
+	if len(d.entries) < d.maxEntries {
+		return true
 	}
-	if len(d.entries) >= d.maxEntries {
-		oldestSN := 0
-		var oldestExpiry time.Time
-		for storedSN, expiresAt := range d.entries {
-			if oldestExpiry.IsZero() || expiresAt.Before(oldestExpiry) {
-				oldestSN = storedSN
-				oldestExpiry = expiresAt
-			}
+	oldestKey := ""
+	var oldestExpiry time.Time
+	for key, entry := range d.entries {
+		if entry.state != WebhookDedupCompleted {
+			continue
 		}
-		delete(d.entries, oldestSN)
+		if oldestExpiry.IsZero() || entry.expiresAt.Before(oldestExpiry) {
+			oldestKey = key
+			oldestExpiry = entry.expiresAt
+		}
 	}
-	d.entries[sn] = now.Add(ttl)
-	return false, nil
+	if oldestKey == "" {
+		return false
+	}
+	delete(d.entries, oldestKey)
+	return true
 }
 
 type WebhookOption func(*WebhookHandler)
@@ -102,7 +192,18 @@ func WithWebhookDeduplicator(deduplicator WebhookDeduplicator) WebhookOption {
 	}
 }
 
-// WithWebhookDedupTTL 设置 SN 在去重存储中的有效期。
+// WithWebhookTransactionalDeduplicator 注入支持预留所有权的持久化或分布式去重器。
+func WithWebhookTransactionalDeduplicator(deduplicator WebhookTransactionalDeduplicator) WebhookOption {
+	return func(handler *WebhookHandler) {
+		if deduplicator == nil {
+			handler.configErr = fmt.Errorf("Webhook事务型去重器不能为空")
+			return
+		}
+		handler.transactionalDeduplicator = deduplicator
+	}
+}
+
+// WithWebhookDedupTTL 设置已完成事件在去重存储中的有效期。
 func WithWebhookDedupTTL(ttl time.Duration) WebhookOption {
 	return func(handler *WebhookHandler) {
 		handler.dedupTTL = ttl
@@ -477,6 +578,24 @@ func (wh *WebhookHandler) handleEvent(ctx context.Context, msg *WebhookMessage) 
 	}
 	event.S = msg.S
 	event.SN = msg.SN
+	if wh.ackMode == WebhookAckAfterEnqueue {
+		return wh.enqueueBeforeAck(ctx, msg, &event)
+	}
+	return wh.dispatchBeforeAck(ctx, msg, &event)
+}
+
+func (wh *WebhookHandler) enqueueBeforeAck(ctx context.Context, msg *WebhookMessage, event *Event) error {
+	wh.queueMu.RLock()
+	if wh.closed {
+		wh.queueMu.RUnlock()
+		return ErrWebhookClosed
+	}
+	select {
+	case wh.dispatchSlots <- struct{}{}:
+	default:
+		wh.queueMu.RUnlock()
+		return ErrWebhookQueueFull
+	}
 
 	wh.queueMu.RLock()
 	if wh.closed {
