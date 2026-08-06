@@ -1,0 +1,11 @@
+# 生态服务必须由SDK使用者显式配置，不会使用内置地址。
+base_url: https://ecosystem.example.com
+channel: stable
+
+# 是否匿名贡献在线SDK客户端实例数量。
+# 省略该字段时默认为true；设置为false后仍可使用版本检测和公开统计查询。
+contribute_to_community: true
+
+# 可选：记录“匿名贡献默认开启”提示已经显示过。
+# Docker环境建议放到持久化卷；省略时会在本配置文件旁创建标记文件。
+# notice_state_path: /var/lib/kook-go-sdk/community-notice-v1

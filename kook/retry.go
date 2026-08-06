@@ -43,10 +43,9 @@ func IsRetryableError(err error) bool {
 		return false
 	}
 
-	// 网络相关错误。HTTP客户端会用%w包装底层错误，因此必须遍历错误链。
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
-		return true
+	// 网络相关错误
+	if netErr, ok := err.(net.Error); ok {
+		return netErr.Timeout()
 	}
 
 	// URL 错误

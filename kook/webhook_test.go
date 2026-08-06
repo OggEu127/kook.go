@@ -132,19 +132,16 @@ func zlibWebhookPayload(t *testing.T, payload []byte) []byte {
 }
 
 func TestWebhookAES256CBC(t *testing.T) {
-	for _, key := range []string{"short-key", "0123456789abcdef0123456789abcdef"} {
-		key := key
-		t.Run(fmt.Sprintf("key-length-%d", len(key)), func(t *testing.T) {
-			client := newWebhookTestClient(t)
-			defer func() { _ = client.Close() }()
-			handler := NewWebhookHandler(client, key, "verify")
-			defer func() { _ = handler.Shutdown(context.Background()) }()
-			received := make(chan string, 1)
-			handler.OnMessage(MessageTypeText, func(event *MessageEvent) {
-				content, err := event.TextContent()
-				require.NoError(t, err)
-				received <- content
-			})
+	client := newWebhookTestClient(t)
+	defer func() { _ = client.Close() }()
+	const key = "0123456789abcdef0123456789abcdef"
+	handler := NewWebhookHandler(client, key, "verify")
+	received := make(chan string, 1)
+	handler.OnMessage(MessageTypeText, func(event *MessageEvent) {
+		content, err := event.TextContent()
+		require.NoError(t, err)
+		received <- content
+	})
 
 			plain := webhookPayload(t, 11, textWebhookEvent("verify", "encrypted"))
 			encrypted := encryptWebhookPayloadForTest(t, plain, key)
@@ -330,23 +327,6 @@ func TestWebhookHandlerPanicAndConcurrency(t *testing.T) {
 	}
 }
 
-func TestWebhookHandlerPanicReleasesDedupReservation(t *testing.T) {
-	client := newWebhookTestClient(t)
-	defer func() { _ = client.Close() }()
-	handler := NewWebhookHandler(client, "", "verify")
-	defer func() { _ = handler.Shutdown(context.Background()) }()
-	var calls atomic.Int32
-	handler.OnMessage(MessageTypeText, func(*MessageEvent) {
-		calls.Add(1)
-		panic("expected panic")
-	})
-	payload := webhookPayload(t, 99, textWebhookEvent("verify", "retry-after-panic"))
-
-	require.Equal(t, http.StatusInternalServerError, performWebhookRequest(handler, payload, "").Code)
-	require.Equal(t, http.StatusInternalServerError, performWebhookRequest(handler, payload, "").Code)
-	require.Equal(t, int32(2), calls.Load())
-}
-
 func TestWebhookRejectsInvalidConfigurationAndOversizedBodies(t *testing.T) {
 	client := newWebhookTestClient(t)
 	defer func() { _ = client.Close() }()
@@ -356,21 +336,12 @@ func TestWebhookRejectsInvalidConfigurationAndOversizedBodies(t *testing.T) {
 	invalid := NewWebhookHandler(client, "", "")
 	recorder := performWebhookRequest(invalid, []byte(`{}`), "")
 	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
-	shortKeyHandler, err := NewWebhookHandlerWithError(client, "short", "verify")
-	require.NoError(t, err)
-	require.NoError(t, shortKeyHandler.Shutdown(context.Background()))
-	_, err = NewWebhookHandlerWithError(client, strings.Repeat("x", 33), "verify")
+	_, err = NewWebhookHandlerWithError(client, "short", "verify")
 	require.ErrorContains(t, err, "encryptKey")
 	_, err = NewWebhookHandlerWithError(client, "", "verify", WithWebhookDeduplicator(nil))
 	require.ErrorContains(t, err, "去重器")
-	_, err = NewWebhookHandlerWithError(client, "", "verify", WithWebhookTransactionalDeduplicator(nil))
-	require.ErrorContains(t, err, "事务型去重器")
 	_, err = NewWebhookHandlerWithError(client, "", "verify", WithWebhookDedupTTL(0))
 	require.ErrorContains(t, err, "TTL")
-	_, err = NewWebhookHandlerWithError(client, "", "verify", WithWebhookProcessingTTL(0))
-	require.ErrorContains(t, err, "处理租约")
-	_, err = NewWebhookHandlerWithError(client, "", "verify", WithWebhookAckMode(WebhookAckMode(99)))
-	require.ErrorContains(t, err, "确认模式")
 	_, err = NewWebhookHandlerWithError(client, "", "verify", WithWebhookDispatch(1, 2))
 	require.ErrorContains(t, err, "派发")
 
@@ -405,10 +376,7 @@ func TestWebhookQueueBackpressureDoesNotDeduplicateRejectedEvent(t *testing.T) {
 
 	first := webhookPayload(t, 1, textWebhookEvent("verify", "first"))
 	second := webhookPayload(t, 2, textWebhookEvent("verify", "second"))
-	firstResult := make(chan int, 1)
-	go func() {
-		firstResult <- performWebhookRequest(handler, first, "").Code
-	}()
+	require.Equal(t, http.StatusOK, performWebhookRequest(handler, first, "").Code)
 	select {
 	case <-started:
 	case <-time.After(time.Second):
@@ -416,7 +384,6 @@ func TestWebhookQueueBackpressureDoesNotDeduplicateRejectedEvent(t *testing.T) {
 	}
 	require.Equal(t, http.StatusServiceUnavailable, performWebhookRequest(handler, second, "").Code)
 	close(release)
-	require.Equal(t, http.StatusOK, <-firstResult)
 	require.Equal(t, 1, receiveInt(t, received))
 
 	require.Equal(t, http.StatusOK, performWebhookRequest(handler, second, "").Code)

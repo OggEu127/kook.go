@@ -2,7 +2,7 @@
 
 ## 离线验收
 
-项目最低支持 Go 1.21，发布门禁在 Go 1.21.13 和 Go 1.26.5 上运行。完整离线检查：
+项目支持 Go 1.21.x 与当前稳定 Go。完整离线检查：
 
 ```bash
 go test -short ./...
@@ -18,7 +18,7 @@ git diff --check
 
 ## 真实只读集成测试
 
-不带 `-short` 的 `TestKOOKReadOnlyIntegration` 只读取现有资源，不创建、修改或删除 KOOK 数据。它也覆盖 `invite/invitees` 的受邀用户与留存统计查询，并会自动选取测试服务器中的第一个现有邀请；该服务器必须至少有一条邀请。运行前安全注入下列环境变量：
+不带 `-short` 的 `TestKOOKReadOnlyIntegration` 只读取现有资源，不创建、修改或删除 KOOK 数据。运行前安全注入下列环境变量：
 
 ```text
 KOOK_TOKEN
@@ -40,6 +40,23 @@ go test ./kook -run '^TestKOOKReadOnlyIntegration$' -count=1 -v
 ```
 
 不要把凭据写入 `.env`、测试夹具、命令行参数、日志或仓库文件。CI 不运行真实集成测试。
+
+## 生态服务存储集成测试
+
+`TestPostgresAndRedisIntegration` 只操作隔离的生态测试数据库和 Redis DB，不访问 KOOK。它会清空所配置的数据库表和 Redis DB，因此不得指向生产或共享实例。
+
+```text
+ECOSYSTEM_TEST_DATABASE_URL=postgres://kook:password@127.0.0.1:5432/kook_ecosystem_test?sslmode=disable
+ECOSYSTEM_TEST_REDIS_URL=redis://127.0.0.1:6379/15
+```
+
+运行：
+
+```bash
+go test ./internal/ecosystem -run '^TestPostgresAndRedisIntegration$' -count=1 -v
+```
+
+CI 使用临时 PostgreSQL/Redis service containers 自动执行该测试。
 
 ## 显式排除的测试
 

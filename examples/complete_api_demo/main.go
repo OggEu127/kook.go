@@ -17,10 +17,7 @@ func main() {
 	}
 
 	// 创建客户端
-	client, err := kook.NewClientWithError(token)
-	if err != nil {
-		log.Fatalf("创建客户端失败: %v", err)
-	}
+	client := kook.NewClient(token)
 	defer func() { _ = client.Close() }()
 
 	// 获取当前用户信息

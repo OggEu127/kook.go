@@ -31,32 +31,10 @@ const (
 )
 
 var (
-	ErrWebhookVerifyToken     = errors.New("webhook verify_token不匹配")
-	ErrWebhookBodyTooLarge    = errors.New("Webhook请求体超过限制")
-	ErrWebhookQueueFull       = errors.New("Webhook事件队列已满")
-	ErrWebhookEventInFlight   = errors.New("Webhook事件正在处理中")
-	ErrWebhookDedupCapacity   = errors.New("Webhook去重器容量已满")
-	ErrWebhookReservationLost = errors.New("Webhook去重预留已失效")
-	ErrWebhookClosed          = errors.New("Webhook处理器已关闭")
-)
-
-// WebhookAckMode 控制何时向KOOK确认事件。
-type WebhookAckMode int
-
-const (
-	// WebhookAckAfterDispatch 是安全默认值：处理器全部返回且去重状态提交后才响应200。
-	WebhookAckAfterDispatch WebhookAckMode = iota
-	// WebhookAckAfterEnqueue 在事件进入内存队列后立即响应200，适合调用方另有持久化保证的场景。
-	WebhookAckAfterEnqueue
-)
-
-// WebhookDedupState 是事务型去重器的原子预留结果。
-type WebhookDedupState int
-
-const (
-	WebhookDedupAcquired WebhookDedupState = iota
-	WebhookDedupCompleted
-	WebhookDedupInFlight
+	ErrWebhookVerifyToken  = errors.New("webhook verify_token不匹配")
+	ErrWebhookBodyTooLarge = errors.New("Webhook请求体超过限制")
+	ErrWebhookQueueFull    = errors.New("Webhook事件队列已满")
+	ErrWebhookClosed       = errors.New("Webhook处理器已关闭")
 )
 
 // WebhookDeduplicator 可由数据库或缓存实现，以便多实例共享事件去重状态。
@@ -232,20 +210,6 @@ func WithWebhookDedupTTL(ttl time.Duration) WebhookOption {
 	}
 }
 
-// WithWebhookProcessingTTL 设置事务型去重预留的最长处理租约。
-func WithWebhookProcessingTTL(ttl time.Duration) WebhookOption {
-	return func(handler *WebhookHandler) {
-		handler.processingTTL = ttl
-	}
-}
-
-// WithWebhookAckMode 设置Webhook确认时机。默认在处理完成后确认。
-func WithWebhookAckMode(mode WebhookAckMode) WebhookOption {
-	return func(handler *WebhookHandler) {
-		handler.ackMode = mode
-	}
-}
-
 // WithWebhookBodyLimits 设置压缩前和解压后的最大请求体字节数。
 func WithWebhookBodyLimits(maxBodyBytes, maxDecodedBytes int64) WebhookOption {
 	return func(handler *WebhookHandler) {
@@ -264,37 +228,25 @@ func WithWebhookDispatch(queueSize, workers int) WebhookOption {
 
 // WebhookHandler 处理 KOOK Webhook 验证、解密、解压、去重和事件分发。
 type WebhookHandler struct {
-	client                    *Client
-	encryptKey                string
-	verifyToken               string
-	dispatcher                *eventDispatcher
-	deduplicator              WebhookDeduplicator
-	transactionalDeduplicator WebhookTransactionalDeduplicator
-	dedupTTL                  time.Duration
-	processingTTL             time.Duration
-	ackMode                   WebhookAckMode
-	maxBodyBytes              int64
-	maxDecodedBytes           int64
-	queueSize                 int
-	workerCount               int
-	configErr                 error
-	dispatchQueue             chan webhookDispatchJob
-	dispatchSlots             chan struct{}
-	queueMu                   sync.RWMutex
-	closed                    bool
-	workerWG                  sync.WaitGroup
-	workersDone               chan struct{}
-	serverMu                  sync.Mutex
-	server                    *http.Server
-}
-
-type webhookDispatchJob struct {
-	event         *Event
-	dedupKey      string
-	reservation   string
-	transactional WebhookTransactionalDeduplicator
-	dedupTTL      time.Duration
-	done          chan error
+	client          *Client
+	encryptKey      string
+	verifyToken     string
+	dispatcher      *eventDispatcher
+	deduplicator    WebhookDeduplicator
+	dedupTTL        time.Duration
+	maxBodyBytes    int64
+	maxDecodedBytes int64
+	queueSize       int
+	workerCount     int
+	configErr       error
+	dispatchQueue   chan *Event
+	dispatchSlots   chan struct{}
+	queueMu         sync.RWMutex
+	closed          bool
+	workerWG        sync.WaitGroup
+	workersDone     chan struct{}
+	serverMu        sync.Mutex
+	server          *http.Server
 }
 
 type WebhookMessage struct {
@@ -338,8 +290,6 @@ func newWebhookHandler(client *Client, encryptKey, verifyToken string, options .
 		dispatcher:      newEventDispatcher(),
 		deduplicator:    NewMemoryWebhookDeduplicator(defaultWebhookDedupMax),
 		dedupTTL:        defaultWebhookDedupTTL,
-		processingTTL:   defaultWebhookLease,
-		ackMode:         WebhookAckAfterDispatch,
 		maxBodyBytes:    defaultWebhookMaxBody,
 		maxDecodedBytes: defaultWebhookMaxData,
 		queueSize:       defaultWebhookQueue,
@@ -352,17 +302,14 @@ func newWebhookHandler(client *Client, encryptKey, verifyToken string, options .
 		}
 		option(handler)
 	}
-	if handler.configErr != nil {
-		return handler, handler.configErr
-	}
 	if client == nil || client.logger == nil || client.closed.Load() {
 		return handler, fmt.Errorf("Webhook客户端不能为空")
 	}
 	if strings.TrimSpace(verifyToken) == "" {
 		return handler, fmt.Errorf("webhook verifyToken不能为空")
 	}
-	if len(encryptKey) > 32 {
-		return handler, fmt.Errorf("webhook encryptKey长度不能超过32字节")
+	if encryptKey != "" && len(encryptKey) != 16 && len(encryptKey) != 24 && len(encryptKey) != 32 {
+		return handler, fmt.Errorf("webhook encryptKey长度必须为16、24或32字节")
 	}
 	if handler.deduplicator == nil {
 		return handler, fmt.Errorf("Webhook去重器不能为空")
@@ -370,28 +317,13 @@ func newWebhookHandler(client *Client, encryptKey, verifyToken string, options .
 	if handler.dedupTTL <= 0 {
 		return handler, fmt.Errorf("Webhook去重TTL必须大于0")
 	}
-	if handler.processingTTL <= 0 {
-		return handler, fmt.Errorf("Webhook处理租约必须大于0")
-	}
-	if handler.ackMode != WebhookAckAfterDispatch && handler.ackMode != WebhookAckAfterEnqueue {
-		return handler, fmt.Errorf("Webhook确认模式无效")
-	}
-	if handler.ackMode == WebhookAckAfterDispatch {
-		if handler.transactionalDeduplicator == nil {
-			transactional, ok := handler.deduplicator.(WebhookTransactionalDeduplicator)
-			if !ok {
-				return handler, fmt.Errorf("Webhook处理完成确认模式要求事务型去重器")
-			}
-			handler.transactionalDeduplicator = transactional
-		}
-	}
 	if handler.maxBodyBytes <= 0 || handler.maxDecodedBytes <= 0 {
 		return handler, fmt.Errorf("Webhook请求体限制无效")
 	}
 	if handler.queueSize <= 0 || handler.workerCount != 1 {
 		return handler, fmt.Errorf("Webhook派发配置无效")
 	}
-	handler.dispatchQueue = make(chan webhookDispatchJob, handler.queueSize)
+	handler.dispatchQueue = make(chan *Event, handler.queueSize)
 	handler.dispatchSlots = make(chan struct{}, handler.queueSize)
 	for index := 0; index < handler.workerCount; index++ {
 		handler.workerWG.Add(1)
@@ -487,7 +419,7 @@ func (wh *WebhookHandler) HandleRequest(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
-		if errors.Is(err, ErrWebhookQueueFull) || errors.Is(err, ErrWebhookEventInFlight) || errors.Is(err, ErrWebhookDedupCapacity) || errors.Is(err, ErrWebhookClosed) {
+		if errors.Is(err, ErrWebhookQueueFull) || errors.Is(err, ErrWebhookClosed) {
 			http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
 			return
 		}
@@ -665,6 +597,18 @@ func (wh *WebhookHandler) enqueueBeforeAck(ctx context.Context, msg *WebhookMess
 		return ErrWebhookQueueFull
 	}
 
+	wh.queueMu.RLock()
+	if wh.closed {
+		wh.queueMu.RUnlock()
+		return ErrWebhookClosed
+	}
+	select {
+	case wh.dispatchSlots <- struct{}{}:
+	default:
+		wh.queueMu.RUnlock()
+		return ErrWebhookQueueFull
+	}
+
 	duplicate, err := wh.deduplicator.CheckAndStore(ctx, msg.SN, wh.dedupTTL)
 	if err != nil {
 		<-wh.dispatchSlots
@@ -677,107 +621,19 @@ func (wh *WebhookHandler) enqueueBeforeAck(ctx context.Context, msg *WebhookMess
 		wh.client.logger.Debugf("忽略重复Webhook事件SN: %d", msg.SN)
 		return nil
 	}
-	wh.dispatchQueue <- webhookDispatchJob{event: event}
+	wh.dispatchQueue <- &event
 	wh.queueMu.RUnlock()
 	return nil
 }
 
-func (wh *WebhookHandler) dispatchBeforeAck(ctx context.Context, msg *WebhookMessage, event *Event) error {
-	wh.queueMu.RLock()
-	closed := wh.closed
-	wh.queueMu.RUnlock()
-	if closed {
-		return ErrWebhookClosed
-	}
-	key := webhookEventDedupKey(msg)
-	state, reservation, err := wh.transactionalDeduplicator.Reserve(ctx, key, wh.processingTTL)
-	if err != nil {
-		return fmt.Errorf("预留Webhook事件失败: %w", err)
-	}
-	switch state {
-	case WebhookDedupCompleted:
-		wh.client.logger.Debugf("忽略重复Webhook事件SN: %d", msg.SN)
-		return nil
-	case WebhookDedupInFlight:
-		return ErrWebhookEventInFlight
-	case WebhookDedupAcquired:
-	default:
-		wh.releaseReservation(key, reservation)
-		return fmt.Errorf("webhook去重器返回了未知状态: %d", state)
-	}
-
-	wh.queueMu.RLock()
-	if wh.closed {
-		wh.queueMu.RUnlock()
-		wh.releaseReservation(key, reservation)
-		return ErrWebhookClosed
-	}
-	select {
-	case wh.dispatchSlots <- struct{}{}:
-	default:
-		wh.queueMu.RUnlock()
-		wh.releaseReservation(key, reservation)
-		return ErrWebhookQueueFull
-	}
-	done := make(chan error, 1)
-	wh.dispatchQueue <- webhookDispatchJob{
-		event:         event,
-		dedupKey:      key,
-		reservation:   reservation,
-		transactional: wh.transactionalDeduplicator,
-		dedupTTL:      wh.dedupTTL,
-		done:          done,
-	}
-	wh.queueMu.RUnlock()
-
-	select {
-	case err := <-done:
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func webhookEventDedupKey(msg *WebhookMessage) string {
-	digest := sha256.Sum256(msg.D)
-	return fmt.Sprintf("event:%d:%d:%x", msg.S, msg.SN, digest)
-}
-
-func (wh *WebhookHandler) releaseReservation(key, reservation string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := wh.transactionalDeduplicator.Release(ctx, key, reservation); err != nil {
-		wh.client.logger.Error("释放Webhook事件预留失败")
-	}
-}
-
 func (wh *WebhookHandler) runWorker() {
 	defer wh.workerWG.Done()
-	for job := range wh.dispatchQueue {
-		err := wh.dispatcher.dispatch(job.event, func(recovered any) {
+	for event := range wh.dispatchQueue {
+		err := wh.dispatcher.dispatch(event, func(recovered any) {
 			wh.client.logger.Error("事件处理器发生panic")
 		})
-		if job.transactional != nil {
-			storeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			if err == nil {
-				if completeErr := job.transactional.Complete(storeCtx, job.dedupKey, job.reservation, job.dedupTTL); completeErr != nil {
-					err = fmt.Errorf("提交Webhook去重状态失败: %w", completeErr)
-				}
-			}
-			cancel()
-			if err != nil {
-				releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
-				if releaseErr := job.transactional.Release(releaseCtx, job.dedupKey, job.reservation); releaseErr != nil && !errors.Is(releaseErr, ErrWebhookReservationLost) {
-					err = errors.Join(err, fmt.Errorf("释放Webhook事件预留失败: %w", releaseErr))
-				}
-				releaseCancel()
-			}
-		}
 		if err != nil {
 			wh.client.logger.Error("分发Webhook事件失败")
-		}
-		if job.done != nil {
-			job.done <- err
 		}
 		<-wh.dispatchSlots
 	}

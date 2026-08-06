@@ -88,6 +88,7 @@ type WebSocketClient struct {
 	reconnectCount  int
 	maxReconnects   int
 	isConnected     bool
+	ecosystemOnline bool
 	connMu          sync.RWMutex
 	writeMu         sync.Mutex
 	options         WebSocketOptions
@@ -166,14 +167,15 @@ func newWebSocketClient(client *Client, compress bool, options ...WebSocketOptio
 	ctx, cancel := context.WithCancel(context.Background())
 	wsOptions := DefaultWebSocketOptions()
 	ws := &WebSocketClient{
-		client:        client,
-		dispatcher:    newEventDispatcher(),
-		ctx:           ctx,
-		cancel:        cancel,
-		compress:      compress,
-		maxReconnects: 10,
-		options:       wsOptions,
-		eventBuffer:   make(map[int]bufferedEvent),
+		client:         client,
+		dispatcher:     newEventDispatcher(),
+		ctx:            ctx,
+		cancel:         cancel,
+		compress:       compress,
+		maxReconnects:  10,
+		reconnectDelay: 5 * time.Second,
+		options:        wsOptions,
+		eventBuffer:    make(map[int]bufferedEvent),
 	}
 	if len(options) > 1 {
 		cancel()
@@ -202,9 +204,6 @@ func validateWebSocketOptions(options WebSocketOptions) error {
 	}
 	if options.MaxEventBuffer <= 0 || options.EventBufferTTL <= 0 || options.DispatchQueueSize <= 0 {
 		return fmt.Errorf("WebSocket缓冲区配置必须大于0")
-	}
-	if options.ReconnectInitialDelay <= 0 || options.ReconnectMaxDelay < options.ReconnectInitialDelay {
-		return fmt.Errorf("WebSocket重连延迟配置无效")
 	}
 	return nil
 }
@@ -376,15 +375,13 @@ func (ws *WebSocketClient) doConnect() error {
 	}
 	ws.conn = conn
 	ws.isConnected = true
+	notifyEcosystem := !ws.ecosystemOnline
+	ws.ecosystemOnline = true
 	ws.connMu.Unlock()
-	ws.activateConnectionGeneration()
-	for _, replayedMessage := range replayed {
-		if err := ws.handleMessage(replayedMessage); err != nil {
-			ws.invalidateGeneration(ws.getGeneration())
-			_ = ws.closeActiveConnection()
-			return fmt.Errorf("处理Resume重放事件失败: %w", err)
-		}
+	if notifyEcosystem {
+		ws.client.Ecosystem.gatewayConnected()
 	}
+	ws.activateConnectionGeneration()
 
 	ws.client.logger.Info("WebSocket连接成功")
 
@@ -466,6 +463,24 @@ func (ws *WebSocketClient) waitHello(conn *websocket.Conn, resuming bool) ([]*We
 			return nil, fmt.Errorf("WebSocket握手阶段收到未知信令=%d", msg.S)
 		}
 	}
+	switch msg.S {
+	case SignalHello:
+		if err := ws.handleHello(msg); err != nil {
+			return err
+		}
+	case SignalResumeAck:
+		if ws.getSessionID() == "" {
+			return fmt.Errorf("收到ResumeAck但本地会话为空")
+		}
+		if err := ws.handleResumeAck(msg); err != nil {
+			return err
+		}
+		ws.startHeartbeat()
+	default:
+		return fmt.Errorf("首个WebSocket消息信令=%d，期望Hello或ResumeAck信令", msg.S)
+	}
+	ws.refreshReadDeadline(conn)
+	return nil
 }
 
 func (ws *WebSocketClient) refreshReadDeadline(conn *websocket.Conn) {
@@ -511,6 +526,7 @@ func (ws *WebSocketClient) Close() error {
 		ws.stopGapTimer()
 		ws.clearPendingPing()
 		closeErr = ws.closeActiveConnection()
+		ws.client.Ecosystem.unregisterIfIdle()
 	})
 	return closeErr
 }
@@ -526,11 +542,17 @@ func (ws *WebSocketClient) handleMessages(conn *websocket.Conn) {
 		}
 
 		ws.connMu.Lock()
+		notifyEcosystem := false
 		if ws.conn == conn {
 			ws.conn = nil
 			ws.isConnected = false
+			notifyEcosystem = ws.ecosystemOnline
+			ws.ecosystemOnline = false
 		}
 		ws.connMu.Unlock()
+		if notifyEcosystem {
+			ws.client.Ecosystem.gatewayDisconnected()
+		}
 		_ = conn.Close()
 
 		// 主动关闭时不重连
@@ -1031,7 +1053,13 @@ func (ws *WebSocketClient) ackPendingPing(sn int) {
 
 // sendMessage 发送WebSocket消息
 func (ws *WebSocketClient) sendMessage(msg *WebSocketMessage) error {
-	ws.client.logger.Debugf("发送WebSocket消息: signal=%d sn=%d", msg.S, msg.SN)
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("序列化消息失败: %w", err)
+	}
+
+	ws.client.logger.Debugf("发送WebSocket消息: signal=%d sn=%d bytes=%d", msg.S, msg.SN, len(data))
+
 	ws.connMu.RLock()
 	conn := ws.conn
 	ws.connMu.RUnlock()
@@ -1131,16 +1159,6 @@ func (ws *WebSocketClient) resetSessionStateForFreshReconnect() {
 	ws.clearPendingPing()
 }
 
-func (ws *WebSocketClient) resetSequenceForFreshSession() {
-	ws.stopGapTimer()
-	ws.stateMu.Lock()
-	ws.sn = 0
-	ws.receivedSN = 0
-	ws.eventBuffer = make(map[int]bufferedEvent)
-	ws.stateMu.Unlock()
-	ws.clearPendingPing()
-}
-
 func (ws *WebSocketClient) invalidateGeneration(generation uint64) {
 	ws.stopGapTimer()
 	ws.stateMu.Lock()
@@ -1192,7 +1210,12 @@ func (ws *WebSocketClient) closeActiveConnection() error {
 	conn := ws.conn
 	ws.conn = nil
 	ws.isConnected = false
+	notifyEcosystem := ws.ecosystemOnline
+	ws.ecosystemOnline = false
 	ws.connMu.Unlock()
+	if notifyEcosystem {
+		ws.client.Ecosystem.gatewayDisconnected()
+	}
 	if conn != nil {
 		return conn.Close()
 	}

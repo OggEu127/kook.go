@@ -35,15 +35,18 @@ verify*.go
 real*.go
 temp*.go
 
-# Logs
-*.log
-
 # Environment variables
 .env
 .env.local
 
-# 示例配置文件（包含敏感信息）
+# config
 config.json
 token.txt
 DETAILED_GUIDE.md
 CLAUDE.md 
+docs/kook-go-sdk-usage-guide.md
+cmd/
+internal/
+docker-compose.ecosystem.yml
+Dockerfile.ecosystem
+.dockerignore

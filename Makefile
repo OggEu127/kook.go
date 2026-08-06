@@ -1,4 +1,4 @@
-.PHONY: all deps tidy test test-race test-integration test-mutation test-oauth \
+.PHONY: all deps tidy test test-race test-integration test-ecosystem-integration test-mutation test-oauth \
 	build build-all build-examples run fmt fmt-check vet lint vuln clean install docs \
 	example-simple example-webhook example-api example-advanced example-complete \
 	verify test-full help
@@ -29,6 +29,10 @@ test-race:
 # 运行真实 KOOK 只读测试，所需环境变量见 TESTING.md。
 test-integration:
 	$(GO) test ./...
+
+# 需要隔离的PostgreSQL和Redis，环境变量见TESTING.md。
+test-ecosystem-integration:
+	$(GO) test ./internal/ecosystem -run '^TestPostgresAndRedisIntegration$$' -count=1 -v
 
 # 该目标会创建、更新并删除真实资源，应使用隔离测试服务器。
 test-mutation:
@@ -113,6 +117,7 @@ help:
 	@echo "  test              运行离线测试"
 	@echo "  test-race         运行离线竞态测试"
 	@echo "  test-integration  运行真实 KOOK 只读测试"
+	@echo "  test-ecosystem-integration  运行生态 PostgreSQL/Redis 集成测试"
 	@echo "  test-mutation     运行真实 KOOK 写入测试"
 	@echo "  test-oauth        运行真实 OAuth 测试"
 	@echo "  build             构建根目录程序到 build/"

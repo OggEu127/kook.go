@@ -21,8 +21,10 @@ const (
 	BaseURL = "https://www.kookapp.cn/api"
 	// Version API版本
 	Version = "v3"
+	// SDKVersion SDK语义化版本
+	SDKVersion = "1.3.0"
 	// UserAgent 用户代理
-	UserAgent = "KOOK-Go-SDK/1.2.0"
+	UserAgent = "KOOK-Go-SDK/" + SDKVersion
 )
 
 // TokenType 鉴权类型
@@ -37,16 +39,17 @@ const (
 
 // Client KOOK API客户端
 type Client struct {
-	httpClient  *http.Client
-	token       string
-	tokenType   TokenType
-	baseURL     string
-	logger      *logrus.Logger
-	rateLimiter *GlobalRateLimiter
-	retryConfig *RetryConfig
-	closed      atomic.Bool
-	configErr   error
-	noRateLimit bool
+	httpClient       *http.Client
+	token            string
+	tokenType        TokenType
+	baseURL          string
+	logger           *logrus.Logger
+	rateLimiter      *GlobalRateLimiter
+	retryConfig      *RetryConfig
+	closed           atomic.Bool
+	configErr        error
+	noRateLimit      bool
+	ecosystemOptions *EcosystemOptions
 
 	// API服务
 	Gateway       *GatewayService
@@ -72,6 +75,7 @@ type Client struct {
 	Thread    *ThreadService
 	Voice     *VoiceService
 	Template  *TemplateService
+	Ecosystem *EcosystemService
 	// 以下服务仅用于旧代码编译兼容，未确认端点会返回 ErrUnsupportedEndpoint。
 	Region   *RegionService
 	OAuth    *OAuthService
@@ -169,6 +173,14 @@ func WithoutRetry() ClientOption {
 	}
 }
 
+// WithEcosystem 显式启用KOOK Go SDK生态服务。未配置该选项时SDK不会发送生态请求。
+func WithEcosystem(options EcosystemOptions) ClientOption {
+	return func(c *Client) {
+		cloned := options
+		c.ecosystemOptions = &cloned
+	}
+}
+
 // NewClient 创建新的KOOK客户端
 func NewClient(token string, options ...ClientOption) *Client {
 	client, err := NewClientWithError(token, options...)
@@ -254,6 +266,14 @@ func NewClientWithError(token string, options ...ClientOption) (*Client, error) 
 	client.Order = &OrderService{client: client}
 	client.Coupon = &CouponService{client: client}
 	client.Boost = &BoostService{client: client}
+	ecosystemService, ecosystemErr := newEcosystemService(client, client.ecosystemOptions)
+	if ecosystemErr != nil {
+		if client.rateLimiter != nil {
+			client.rateLimiter.Close()
+		}
+		return nil, ecosystemErr
+	}
+	client.Ecosystem = ecosystemService
 
 	return client, nil
 }
@@ -310,6 +330,9 @@ func validateRetryConfig(config *RetryConfig) error {
 func (c *Client) Close() error {
 	if c == nil || !c.closed.CompareAndSwap(false, true) {
 		return nil
+	}
+	if c.Ecosystem != nil {
+		c.Ecosystem.close()
 	}
 	if c.rateLimiter != nil {
 		c.rateLimiter.Close()
@@ -654,17 +677,11 @@ func sanitizedURL(rawURL string) string {
 	if err != nil {
 		return "[INVALID URL]"
 	}
-	isInviteesEndpoint := strings.HasSuffix(strings.TrimRight(u.Path, "/"), "/invite/invitees")
 	query := u.Query()
 	for key := range query {
-		lowerKey := strings.ToLower(key)
-		switch lowerKey {
+		switch strings.ToLower(key) {
 		case "access_token", "token", "code", "client_secret", "ticket", "session_id", "gateway_token", "authorization":
 			query.Set(key, "[REDACTED]")
-		case "id", "invite_url":
-			if isInviteesEndpoint {
-				query.Set(key, "[REDACTED]")
-			}
 		}
 	}
 	u.RawQuery = query.Encode()

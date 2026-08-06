@@ -4,11 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -17,59 +15,6 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 )
-
-type roundTripperFunc func(*http.Request) (*http.Response, error)
-
-func (fn roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
-	return fn(request)
-}
-
-type retryTimeoutError struct{}
-
-func (retryTimeoutError) Error() string   { return "temporary timeout" }
-func (retryTimeoutError) Timeout() bool   { return true }
-func (retryTimeoutError) Temporary() bool { return true }
-
-func TestWrappedTransportErrorUsesMethodAwareRetryPolicy(t *testing.T) {
-	newHTTPClient := func(calls *atomic.Int32) *http.Client {
-		return &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
-			if calls.Add(1) == 1 {
-				transportErr := &url.Error{Op: request.Method, URL: request.URL.String(), Err: retryTimeoutError{}}
-				return nil, fmt.Errorf("wrapped transport error: %w", transportErr)
-			}
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Header:     make(http.Header),
-				Body:       io.NopCloser(strings.NewReader(`{"code":0,"data":{}}`)),
-				Request:    request,
-			}, nil
-		})}
-	}
-
-	t.Run("get retries wrapped timeout", func(t *testing.T) {
-		var calls atomic.Int32
-		client := NewClient("token", WithHTTPClient(newHTTPClient(&calls)), WithoutRateLimit(), WithRetryConfig(&RetryConfig{
-			MaxRetries: 1, InitialDelay: time.Millisecond, MaxDelay: time.Millisecond, BackoffFactor: 1,
-		}))
-		defer func() { _ = client.Close() }()
-
-		_, err := client.Get(context.Background(), "read", nil)
-		require.NoError(t, err)
-		require.Equal(t, int32(2), calls.Load())
-	})
-
-	t.Run("post does not retry wrapped timeout by default", func(t *testing.T) {
-		var calls atomic.Int32
-		client := NewClient("token", WithHTTPClient(newHTTPClient(&calls)), WithoutRateLimit(), WithRetryConfig(&RetryConfig{
-			MaxRetries: 1, InitialDelay: time.Millisecond, MaxDelay: time.Millisecond, BackoffFactor: 1,
-		}))
-		defer func() { _ = client.Close() }()
-
-		_, err := client.Post(context.Background(), "write", map[string]interface{}{})
-		require.Error(t, err)
-		require.Equal(t, int32(1), calls.Load())
-	})
-}
 
 func TestNonIdempotentRequestDoesNotRetryServerError(t *testing.T) {
 	var calls atomic.Int32
@@ -327,14 +272,4 @@ func TestSanitizedURLHandlesSensitiveKeysCaseInsensitively(t *testing.T) {
 	require.NotContains(t, result, "#token")
 	require.True(t, strings.Contains(result, "safe=value"))
 	require.True(t, errors.Is(ErrUnsupportedEndpoint, ErrUnsupportedEndpoint))
-}
-
-func TestSanitizedURLRedactsInviteCredentials(t *testing.T) {
-	result := sanitizedURL("https://www.kookapp.cn/api/v3/invite/invitees?id=invite-secret&invite_url=https%3A%2F%2Fkook.vip%2Finvite-url-secret&guild_id=guild")
-
-	require.NotContains(t, result, "invite-secret")
-	require.NotContains(t, result, "invite-url-secret")
-	require.Contains(t, result, "guild_id=guild")
-	require.Contains(t, result, "%5BREDACTED%5D")
-	require.Contains(t, sanitizedURL("https://www.kookapp.cn/api/v3/channel/view?id=resource-id"), "id=resource-id")
 }

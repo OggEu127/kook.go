@@ -2,6 +2,8 @@
 
 本目录包含了KOOK Go SDK的完整示例程序，展示了如何使用SDK的各种功能。
 
+生态服务配置示例见 [`ecosystem.example.yaml`](ecosystem.example.yaml)。`contribute_to_community` 省略时默认为 `true`，首次启用会显示一次非阻塞说明；设置为 `false` 可关闭匿名在线实例贡献。
+
 ## 环境准备
 
 在运行任何示例之前，请确保：
