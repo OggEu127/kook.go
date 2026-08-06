@@ -85,6 +85,7 @@ type WebSocketClient struct {
 	maxReconnects   int
 	reconnectDelay  time.Duration
 	isConnected     bool
+	ecosystemOnline bool
 	connMu          sync.RWMutex
 	writeMu         sync.Mutex
 	options         WebSocketOptions
@@ -365,7 +366,12 @@ func (ws *WebSocketClient) doConnect() error {
 	}
 	ws.conn = conn
 	ws.isConnected = true
+	notifyEcosystem := !ws.ecosystemOnline
+	ws.ecosystemOnline = true
 	ws.connMu.Unlock()
+	if notifyEcosystem {
+		ws.client.Ecosystem.gatewayConnected()
+	}
 	ws.activateConnectionGeneration()
 
 	ws.client.logger.Info("WebSocket连接成功")
@@ -458,6 +464,7 @@ func (ws *WebSocketClient) Close() error {
 		ws.stopGapTimer()
 		ws.clearPendingPing()
 		closeErr = ws.closeActiveConnection()
+		ws.client.Ecosystem.unregisterIfIdle()
 	})
 	return closeErr
 }
@@ -473,11 +480,17 @@ func (ws *WebSocketClient) handleMessages(conn *websocket.Conn) {
 		}
 
 		ws.connMu.Lock()
+		notifyEcosystem := false
 		if ws.conn == conn {
 			ws.conn = nil
 			ws.isConnected = false
+			notifyEcosystem = ws.ecosystemOnline
+			ws.ecosystemOnline = false
 		}
 		ws.connMu.Unlock()
+		if notifyEcosystem {
+			ws.client.Ecosystem.gatewayDisconnected()
+		}
 		_ = conn.Close()
 
 		// 主动关闭时不重连
@@ -1102,7 +1115,12 @@ func (ws *WebSocketClient) closeActiveConnection() error {
 	conn := ws.conn
 	ws.conn = nil
 	ws.isConnected = false
+	notifyEcosystem := ws.ecosystemOnline
+	ws.ecosystemOnline = false
 	ws.connMu.Unlock()
+	if notifyEcosystem {
+		ws.client.Ecosystem.gatewayDisconnected()
+	}
 	if conn != nil {
 		return conn.Close()
 	}
