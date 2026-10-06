@@ -86,6 +86,7 @@ var officialEndpointContracts = []endpointContract{
 	{http.MethodPost, "blacklist/create", ""},
 	{http.MethodPost, "blacklist/delete", ""},
 	{http.MethodGet, "invite/list", ""},
+	{http.MethodGet, "invite/invitees", ""},
 	{http.MethodPost, "invite/create", ""},
 	{http.MethodPost, "invite/delete", ""},
 	{http.MethodPost, "asset/create", ""},
@@ -123,7 +124,7 @@ var officialEndpointContracts = []endpointContract{
 }
 
 func TestOfficialEndpointInventoryAndTransportContract(t *testing.T) {
-	require.Len(t, officialEndpointContracts, 101)
+	require.Len(t, officialEndpointContracts, 102)
 	seen := make(map[string]struct{}, len(officialEndpointContracts))
 	for _, contract := range officialEndpointContracts {
 		key := contract.method + " " + contract.endpoint

@@ -12,6 +12,22 @@ type InviteService struct {
 	client *Client
 }
 
+// GetInvitees 获取被邀请用户列表及邀请留存统计。
+func (s *InviteService) GetInvitees(ctx context.Context, params InviteeListParams) (*ListInviteesResponse, error) {
+	if params.Page <= 0 || params.PageSize <= 0 {
+		return nil, fmt.Errorf("页码和每页数量必须大于0")
+	}
+	resp, err := s.client.Get(ctx, "invite/invitees", params.toQuery())
+	if err != nil {
+		return nil, err
+	}
+	var result ListInviteesResponse
+	if err := json.Unmarshal(resp.Data, &result); err != nil {
+		return nil, fmt.Errorf("解析被邀请用户列表失败: %w", err)
+	}
+	return &result, nil
+}
+
 // GetInviteList 获取邀请列表。
 func (s *InviteService) GetInviteList(ctx context.Context, args ...any) (*ListInvitesResponse, error) {
 	params, err := compatParams("GetInviteList", args, func(args []any) (InviteListParams, bool) {
@@ -145,6 +161,54 @@ func (p InviteListParams) toQuery() map[string]string {
 		query["page_size"] = strconv.Itoa(*p.PageSize)
 	}
 	return query
+}
+
+// InviteeListParams 被邀请用户列表参数。
+type InviteeListParams struct {
+	ID        string // 邀请码
+	InviteURL string // 邀请链接
+	GuildID   string // 服务器ID
+	Status    *int   // 0未退出；254已退出；-1全部；nil使用服务端默认值-1
+	StartTime string // 加入开始时间，例如2026-06-01 12:00:00
+	EndTime   string // 加入结束时间，例如2026-06-02 12:00:00
+	Page      int    // 必填，页码
+	PageSize  int    // 必填，每页数量
+}
+
+func (p InviteeListParams) toQuery() map[string]string {
+	query := map[string]string{
+		"page": strconv.Itoa(p.Page), "page_size": strconv.Itoa(p.PageSize),
+	}
+	for key, value := range map[string]string{
+		"id": p.ID, "invite_url": p.InviteURL, "guild_id": p.GuildID,
+		"start_time": p.StartTime, "end_time": p.EndTime,
+	} {
+		if value != "" {
+			query[key] = value
+		}
+	}
+	if p.Status != nil {
+		query["status"] = strconv.Itoa(*p.Status)
+	}
+	return query
+}
+
+// Invitee 被邀请用户信息。
+type Invitee struct {
+	Status     int    `json:"status"`
+	JoinedTime int64  `json:"joined_time"` // 毫秒时间戳
+	ActiveTime int64  `json:"active_time"` // 毫秒时间戳
+	ShowName   string `json:"show_name"`
+}
+
+// ListInviteesResponse 被邀请用户列表及留存统计。
+type ListInviteesResponse struct {
+	Items     []Invitee      `json:"items"`
+	Meta      PaginationMeta `json:"meta"`
+	Sort      SortFields     `json:"sort"`
+	Count     int            `json:"count"`
+	KeepCount int            `json:"keep_count"`
+	LossCount int            `json:"loss_count"`
 }
 
 // CreateInviteParams 创建邀请参数

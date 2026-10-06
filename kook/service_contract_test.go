@@ -31,7 +31,7 @@ type serviceContract struct {
 
 func TestOfficialServiceContracts(t *testing.T) {
 	contracts := officialServiceContracts()
-	require.Len(t, contracts, 101)
+	require.Len(t, contracts, 102)
 	seen := make(map[string]struct{}, len(contracts))
 
 	for _, contract := range contracts {
@@ -740,6 +740,29 @@ func utilityContracts() []serviceContract {
 					GuildID: "g", ChannelID: "c", Page: testPtr(1), PageSize: testPtr(20),
 				})
 				return err
+			},
+		},
+		{
+			Name: contractName("invite/invitees"), Method: http.MethodGet, Endpoint: "invite/invitees",
+			Query: map[string]string{
+				"id": "x", "invite_url": "https://kook.top/x", "guild_id": "g", "status": "0",
+				"start_time": "2026-06-01 12:00:00", "end_time": "2026-06-02 12:00:00", "page": "1", "page_size": "20",
+			},
+			Data: `{"items":[{"status":0,"joined_time":1773643290000,"active_time":1773643289899,"show_name":"**D#0001"}],"meta":{"page":1,"page_total":1,"page_size":20,"total":1},"sort":{},"count":1,"keep_count":1,"loss_count":0}`,
+			Invoke: func(ctx context.Context, client *Client, _ string) error {
+				result, err := client.Invite.GetInvitees(ctx, InviteeListParams{
+					ID: "x", InviteURL: "https://kook.top/x", GuildID: "g", Status: testPtr(0),
+					StartTime: "2026-06-01 12:00:00", EndTime: "2026-06-02 12:00:00", Page: 1, PageSize: 20,
+				})
+				if err != nil {
+					return err
+				}
+				if len(result.Items) != 1 || result.Items[0] != (Invitee{Status: 0, JoinedTime: 1773643290000, ActiveTime: 1773643289899, ShowName: "**D#0001"}) ||
+					result.Meta.Page != 1 || result.Meta.PageTotal != 1 || result.Meta.PageSize != 20 || result.Meta.Total != 1 ||
+					result.Count != 1 || result.KeepCount != 1 || result.LossCount != 0 {
+					return fmt.Errorf("unexpected invitees response: %+v", result)
+				}
+				return nil
 			},
 		},
 		{
